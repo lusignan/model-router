@@ -1,0 +1,55 @@
+{
+  "preset": "antigravity",
+  "models": {
+    "architect": "gemini-4-carbon-high",
+    "builder_xhigh": "gemini-4-neon-xhigh",
+    "builder_high": "gemini-4-neon-high",
+    "grunt_high": "claude-sonnet-5-5-high",
+    "grunt_low": "claude-sonnet-5-5-low",
+    "failover_grunt_high": "gemini-4-hydrogen-high",
+    "failover_grunt_low": "gemini-4-hydrogen-low",
+    "forensic": "claude-opus-5-5-high"
+  },
+  "thresholds": {
+    "max_inline_edits_lean": 5,
+    "max_inline_batches_lean": 2,
+    "max_inline_edits_heavy": 4,
+    "max_inline_batches_heavy": 1,
+    "claude_exhausted_threshold": 0.02,
+    "gemini_min_fallback_quota": 0.05,
+    "gemini_healthy_specialist_quota": 0.15,
+    "gemini_neon_xhigh_floor": 0.2
+  },
+  "core_code_build_keywords": [
+    "pricing_engine.py",
+    "risk_kernel.py",
+    "portfolio_solver.py",
+    "state_filter.py"
+  ],
+  "neon_xhigh_keywords": [
+    "pricing_engine.py",
+    "risk_kernel.py",
+    "portfolio_solver.py",
+    "backtest_sweep"
+  ],
+  "carbon_code_loop_markers": [
+    "modify pricing_engine.py",
+    "edit risk_kernel.py",
+    "rebuild all reports"
+  ],
+  "plumbing_grunt_keywords": [
+    "docs/runbook.md",
+    "release_notes.md",
+    "changelog-sync",
+    "export_report.py"
+  ],
+  "carbon_spec_research_audit_keywords": [
+    "arbitrage-free",
+    "martingale",
+    "regime-switching"
+  ],
+  "specialist_subagents": [
+    "browser",
+    "image-generator"
+  ]
+}

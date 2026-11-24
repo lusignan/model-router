@@ -1,0 +1,28 @@
+{
+  "model-router": {
+    "PreToolUse": [
+      {
+        "matcher": ".*swarm.*|invoke_subagent|run_workflow|edit_file|write_file|replace_file_content|multi_replace_file_content|write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./hooks/model_stack_router.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*swarm.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./hooks/model_stack_router.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Task|Agent|Edit|MultiEdit|Write|NotebookEdit|.*swarm.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /path/to/model-router/hooks/model_stack_router.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Task|Agent|.*swarm.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /path/to/model-router/hooks/model_stack_router.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

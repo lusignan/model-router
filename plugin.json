@@ -1,0 +1,18 @@
+{
+  "name": "model-router",
+  "displayName": "Model Router",
+  "version": "0.1.0",
+  "description": "Zero-dependency PreToolUse/PostToolUse subagent router, dual-window quota state machine, and parent-context edit-budget guard powered by the Model Alloy policy (0 LLM tokens, pure Python stdlib).",
+  "author": {
+    "name": "lusignan",
+    "url": "https://github.com/lusignan"
+  },
+  "repository": "https://github.com/lusignan/model-router",
+  "homepage": "https://github.com/lusignan/model-router",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Explain how Model Router classifies a worker brief under Antigravity vs. Claude Code presets",
+    "Run a pre-spec Research & Audit Dyad (Architect <-> 1M Empirical Partner) to diagnose residuals and lock a spec",
+    "Execute the 4-Stage Spec -> Build -> Verify -> Audit loop with role-separated workers"
+  ]
+}

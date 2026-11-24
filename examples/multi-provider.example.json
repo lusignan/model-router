@@ -1,0 +1,21 @@
+{
+  "preset": "multi-provider",
+  "models": {
+    "architect": "o3",
+    "builder_xhigh": "gemini-2.5-pro",
+    "builder_high": "gemini-2.5-pro",
+    "grunt_high": "claude-sonnet-4-5",
+    "grunt_low": "claude-haiku-4-5",
+    "failover_grunt_high": "gemini-2.5-flash",
+    "failover_grunt_low": "gemini-2.5-flash",
+    "forensic": "claude-opus-4-6"
+  },
+  "core_code_build_keywords": [
+    "solver_kernel.py",
+    "inference_engine.py"
+  ],
+  "plumbing_grunt_keywords": [
+    "docs/runbook.md",
+    "release_notes.md"
+  ]
+}
