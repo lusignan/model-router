@@ -5,11 +5,11 @@
 **Zero-dependency, deterministic `PreToolUse`/`PostToolUse` subagent router, dual-window quota state machine, and parent-context edit-budget guard for Claude Code and Google Antigravity (0 LLM tokens on the routing hot path).**
 
 <p align="left">
-  <a href="https://github.com/lusignan/model-router/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/lusignan/model-router/ci.yml?branch=main&style=flat-square&label=ci&labelColor=2C333A&color=4E7396" alt="CI"></a>
-  <a href="#30-second-quickstart"><img src="https://img.shields.io/badge/harnesses-Claude%20Code%20%7C%20Antigravity-4E7396?style=flat-square&labelColor=2C333A" alt="Harnesses: Claude Code | Antigravity"></a>
-  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-4E7396?style=flat-square&labelColor=2C333A" alt="Python 3.9+"></a>
-  <a href="pyproject.toml"><img src="https://img.shields.io/badge/dependencies-0%20(stdlib%20only)-B0574C?style=flat-square&labelColor=2C333A" alt="Zero Dependencies"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5E7571?style=flat-square&labelColor=2C333A" alt="MIT License"></a>
+  <a href="https://github.com/lusignan/model-router/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/lusignan/model-router/ci.yml?branch=main&style=flat-square&label=ci&labelColor=1E292D&color=9FBBCD" alt="CI"></a>
+  <a href="#30-second-quickstart"><img src="https://img.shields.io/badge/harnesses-Claude%20Code%20%7C%20Antigravity-9FBBCD?style=flat-square&labelColor=1E292D" alt="Harnesses: Claude Code | Antigravity"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9%2B-9FBBCD?style=flat-square&labelColor=1E292D" alt="Python 3.9+"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/dependencies-0%20(stdlib%20only)-9FBBCD?style=flat-square&labelColor=1E292D" alt="Zero Dependencies"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-9FBBCD?style=flat-square&labelColor=1E292D" alt="MIT License"></a>
 </p>
 
 Built and battle-tested in production as a native **Google Antigravity** plugin (`swarm` routing + 5h RPC/weekly transcript quota reconciliation), with a built-in `PreToolUse`/`PostToolUse` wire adapter for **Claude Code** (`Task`/`Agent` `updatedInput` routing, parent edit-budget guard, HTTP 429 capture) and a pure-Python API (`model_router.decide`) for custom harnesses.
@@ -262,14 +262,16 @@ flowchart LR
     RT -- "Unresolved" --> ND
     RT -- "Verified" --> S1["1. Architect Spec\nLocked Math & File Contract"]
     Q -- "Yes (4-Stage Build Loop)" --> S1
-    S1 --> S2["2. Builder Implementation\nIsolated Core Code Build"]
-    S2 --> S3["3. Fast Verifier / Grunt\nTests, Docs & Commits (w/ Failover)"]
-    S3 --> S4["4. Gatekeeper Audit\nIndependent Diff & Tail-Slice Check"]
-    S4 --> D["Shipped Artifact / Commit"]
+    S1 --> S2["2. Builder + Canary\nIsolated Core Code Build"]
+    S2 --> S3["3. Fast Verifier Sweep\nParallelized Tests & Guards (w/ Failover)"]
+    S2 --> S4["4. Gatekeeper Audit\nConcurrent Diff & Tail-Slice Check"]
+    S3 --> S3B["3b. Grunt Deliver\nDocs Sync & Atomic Commit"]
+    S4 --> S3B
+    S3B --> D["Shipped Artifact / Commit"]
 ```
 
 - **Research & Audit Dyad ([`skills/research-dyad/SKILL.md`](skills/research-dyad/SKILL.md)):** Pre-spec adversarial loop between a reasoning-heavy *Architect* and a long-context *1M Empirical Partner* to falsify hypotheses against full-repo call graphs and out-of-sample slices before code is written.
-- **4-Stage Build & Verification Loop ([`skills/alloy-build/SKILL.md`](skills/alloy-build/SKILL.md)):** Role-separated `Spec -> Implement -> Deterministic Verify -> Adversarial Audit` pipeline: under multi-provider presets (`antigravity`, `multi-provider`), build and review span different model families so no model grades its own work and **blind spots are less correlated**, while the single-provider `claude-code` preset tiers `sonnet` implementation under `opus` review.
+- **4-Stage Build & Verification Loop ([`skills/alloy-build/SKILL.md`](skills/alloy-build/SKILL.md)):** Role-separated `Spec -> Build -> Verify || Audit -> Deliver` pipeline: once the Builder freezes code and canary outputs, deterministic test/guard verification and read-only Gatekeeper diff auditing run concurrently before docs sync and atomic commit. Under multi-provider presets (`antigravity`, `multi-provider`), build and review span different model families so no model grades its own work and **blind spots are less correlated**, while the single-provider `claude-code` preset tiers `sonnet` implementation under `opus` review.
 
 ---
 

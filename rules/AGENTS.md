@@ -24,13 +24,12 @@
 
 Invoke `skills/research-dyad/SKILL.md` whenever diagnosing forecast/model misses, auditing mathematical invariants, or conducting literature + empirical research before a specification exists. Pair `[carbon-dyad]` and `[neon-dyad]` directly with `@mention` handoffs until every hypothesis is empirically resolved and a crisp spec is locked.
 
-### Protocol B — 4-Stage Build & Verification Loop (`Spec -> Build -> Verify -> Audit`)
+### Protocol B — 4-Stage Build & Verification Loop (`Spec -> Build -> Verify || Audit -> Deliver`)
 
 Invoke `skills/alloy-build/SKILL.md` once a specification is locked:
 1. **Architect** locks the mathematical and file-level spec (no heuristic step cliffs or post-hoc output patches).
-2. **Builder (`builder_xhigh`)** (`[neon]` / `[neon-kernel]`) implements the core code changes.
-3. **Fast Verifier / Grunt** (`[grunt]` / `[grunt-low]`) runs verification sweeps, syncs docs/ledgers, and commits atomically (or routes to Builder under `[carbon-neon]` exclusivity).
-4. **Architect** audits `git diff`, evaluation metrics, and tail/subgroup diagnostics before delivery.
+2. **Builder (`builder_xhigh`)** (`[neon]` / `[neon-kernel]`) implements core code changes and runs fast compile + targeted canary/unit checks.
+3. **Fast Verifier / Grunt** (`[grunt]` / `[grunt-low]`) and **4. Architect Gatekeeper** (`[carbon]`) run **concurrently** on the frozen build: Verifier executes the single parallelized test/guard sweep while Architect audits `git diff`, evaluation metrics, and tail/subgroup diagnostics; Grunt then syncs docs/exports and commits atomically (routing to Builder under `[carbon-neon]` exclusivity).
 
 ## Cross-Cutting Invariants
 
@@ -38,4 +37,4 @@ Invoke `skills/alloy-build/SKILL.md` once a specification is locked:
 2. **Mandatory Batching:** Batch upfront reads/searches into 1 parallel turn, batch independent edits into 1–2 parallel turns (`<= 4` files in `1` batch on heavy `>= 1 MB` threads), and chain `compileall && unittest/pytest && guards` in 1 shell command.
 3. **Unmanaged Subagent & Workflow Guard:** Do not call unmanaged `invoke_subagent` (except configured specialists such as `browser` and `image-generator`) or `run_workflow` `agent(...)` from a Gemini parent; use `swarm(action="add", ...)` so Model Router governs every worker's model pool.
 4. **Presets, Layered Config & Escape Hatches:** Choose a built-in preset (`antigravity`, `claude-code`, `multi-provider`) and extend project keywords, role-slot `models`, or `thresholds` in `<repo>/.agents/model-router.json` (or `.agents/alloy.json`). Header role tags and turn flags (`[carbon-neon]`, `[allow-gemini]`, `[claude-exhausted]`) are always parsed safely outside markdown code spans.
-5. **Zero Build-Twice, Disjoint Parallelism & Measured-Rate ETAs:** Research probes import `src/` directly via thin (`<= 300` LOC) adapters rather than standalone pipeline clones; locked specs require `1`-unit production-entry-point canary timings and selective cache-invalidation scopes; disjoint-file builders (`files_A ∩ files_B = ∅`) code and unit-test in parallel on shared checkouts; multi-trial sweeps and evaluations saturate authorized cores; and all ETAs cite `(measured_sec_per_unit * remaining_units / active_cores) + unedited_spec_files` verified against `git status` and live logs.
+5. **Zero Build-Twice, Disjoint Parallelism & Measured-Rate ETAs:** Research probes import `src/` directly via thin (`<= 300` LOC) adapters rather than standalone pipeline clones; locked specs require `1`-unit production-entry-point canary timings and selective cache-invalidation scopes; disjoint-file builders (`files_A ∩ files_B = ∅`) code and unit-test in parallel on shared checkouts; multi-trial sweeps and evaluations saturate authorized cores; all ETAs cite `(measured_sec_per_unit * remaining_units / active_cores) + unedited_spec_files` verified against `git status` and live logs; and background command fan-outs use harness-tracked async tasks or `(... & wait)` rather than untracked detached daemons.
