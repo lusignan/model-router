@@ -149,6 +149,23 @@ class TestGuardsAndCli(RouterTestBase):
         )
         self.assertEqual(sixth["decision"], "deny")
 
+        # Denied PreToolUse attempts must not inflate persisted count or trigger redundant disk writes.
+        lean_state = json.loads(self.edit_state_path.read_text(encoding="utf-8"))
+        self.assertEqual(max(v["count"] for v in lean_state.values()), 5)
+        with mock.patch("model_router.guards.atomic_write_json") as mock_write:
+            seventh = decide(
+                {
+                    "hookEventName": "PreToolUse",
+                    "modelName": "orchestrator (carbon)",
+                    "conversationId": "conv-lean",
+                    "lastUserInput": "Small edit",
+                    "transcriptPath": str(self.transcript_path),
+                    "toolCall": {"name": "edit_file", "args": {"Path": "/repo/file_6.py"}},
+                }
+            )
+            self.assertEqual(seventh["decision"], "deny")
+            mock_write.assert_not_called()
+
         artifact_res = decide(
             {
                 "hookEventName": "PreToolUse",

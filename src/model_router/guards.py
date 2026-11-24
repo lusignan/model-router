@@ -274,12 +274,14 @@ def handle_edit(
     else:
         batches = prev_batches
 
-    pruned[turn_key] = {"count": new_count, "batches": batches, "ts": cur_now}
-    atomic_write_json(state_file, pruned)
-
     batch_ok = (len(batches) <= max_batches) if batch_id else True
     if new_count <= max_edits and batch_ok:
+        pruned[turn_key] = {"count": new_count, "batches": batches, "ts": cur_now}
+        atomic_write_json(state_file, pruned)
         return ALLOW
+
+    if len(pruned) != len(state):
+        atomic_write_json(state_file, pruned)
 
     tier_note = (
         f"heavy >=1 MB thread ({t_bytes // 1024} KB; {max_batches} parallel surgical batch / {max_edits} files max)"

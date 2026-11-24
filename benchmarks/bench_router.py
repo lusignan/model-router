@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gc
 import json
 import os
 import platform
@@ -294,11 +295,18 @@ def run_benchmarks(warm_iterations: int = 2000, cold_iterations: int = 20) -> li
             for idx, (label, payload, conf) in enumerate(workloads):
                 iters = per_workload + (1 if idx < remainder else 0)
                 samples_ms: list[float] = []
-                for _ in range(iters):
-                    t0 = time.perf_counter()
-                    decide(payload, conf)
-                    dt_ms = (time.perf_counter() - t0) * 1000.0
-                    samples_ms.append(dt_ms)
+                gc_was_enabled = gc.isenabled()
+                gc.collect()
+                gc.disable()
+                try:
+                    for _ in range(iters):
+                        t0 = time.perf_counter()
+                        decide(payload, conf)
+                        dt_ms = (time.perf_counter() - t0) * 1000.0
+                        samples_ms.append(dt_ms)
+                finally:
+                    if gc_was_enabled:
+                        gc.enable()
                 all_warm_samples.extend(samples_ms)
                 results.append(_summarize(label, samples_ms, iters))
 
@@ -374,6 +382,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--warm-iterations", type=int, default=2000, help="Total warm decide() iterations.")
     parser.add_argument("--cold-iterations", type=int, default=20, help="Cold hook subprocess runs.")
     parser.add_argument(
+        "--assert-p50-ms",
+        type=float,
+        default=None,
+        help="Fail with non-zero exit if any warm workload p50 exceeds this threshold (ms).",
+    )
+    parser.add_argument(
         "--assert-p99-ms",
         type=float,
         default=None,
@@ -389,8 +403,22 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(format_markdown_table(results))
 
+    warm_rows = [r for r in results if not r["label"].startswith("Cold hook subprocess")]
+    if args.assert_p50_ms is not None:
+        worst_p50 = max(warm_rows, key=lambda r: r["p50_ms"])
+        if worst_p50["p50_ms"] > args.assert_p50_ms:
+            print(
+                f"\nFAIL: '{worst_p50['label']}' warm p50={worst_p50['p50_ms']:.3f} ms "
+                f"exceeded --assert-p50-ms {args.assert_p50_ms:.3f} ms",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"\nPASS: max warm p50={worst_p50['p50_ms']:.3f} ms <= {args.assert_p50_ms:.3f} ms "
+            f"(worst workload: {worst_p50['label']})"
+        )
+
     if args.assert_p99_ms is not None:
-        warm_rows = [r for r in results if not r["label"].startswith("Cold hook subprocess")]
         worst = max(warm_rows, key=lambda r: r["p99_ms"])
         if worst["p99_ms"] > args.assert_p99_ms:
             print(
