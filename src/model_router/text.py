@@ -5,19 +5,42 @@ import re
 
 _CODE_SPAN_RE = re.compile(r"```.*?```|`[^`]*`", re.DOTALL)
 
+BYPASS_TURN_FLAGS: frozenset[str] = frozenset({
+    "[allow-gemini]",
+    "[inline-gemini]",
+    "[allow-inline]",
+    "[bypass-router]",
+})
+
+EXHAUSTED_FLAGS: frozenset[str] = frozenset({
+    "[claude-exhausted]",
+    "[primary-exhausted]",
+})
+
+EXCLUSIVITY_FLAGS: frozenset[str] = frozenset({
+    "[carbon-neon]",
+    "[architect-builder-only]",
+})
+
 _WORKER_TAG_RE = re.compile(
-    r"\[(?:grunt-low|grunt|neon-kernel|neon-research|neon-dyad|neon"
-    r"|carbon-build|carbon-dyad|carbon-neon|carbon|dyad|opus|sonnet|claude-exhausted)\]",
+    r"\[(?:grunt-low|grunt"
+    r"|neon-kernel|neon-research|neon-dyad|neon"
+    r"|builder-xhigh|builder-research|builder-dyad|builder"
+    r"|carbon-build|carbon-dyad|carbon-neon|carbon"
+    r"|architect-build|architect-dyad|architect-builder-only|architect"
+    r"|dyad|opus|forensic|sonnet|claude-exhausted|primary-exhausted)\]",
     re.IGNORECASE,
 )
 
 _TURN_FLAG_RE = re.compile(
-    r"\[(?:allow-gemini|inline-gemini|claude-exhausted|carbon-neon|dyad)\]",
+    r"\[(?:allow-gemini|inline-gemini|allow-inline|bypass-router"
+    r"|claude-exhausted|primary-exhausted"
+    r"|carbon-neon|architect-builder-only|dyad)\]",
     re.IGNORECASE,
 )
 
 _CARBON_NEON_PHRASE_RE = re.compile(
-    r"\bcarbon\s*(?:and|\+|&|/)\s*neon\s+exclusively\b",
+    r"\b(?:carbon\s*(?:and|\+|&|/)\s*neon|architect\s*(?:and|\+|&|/)\s*builder)\s+exclusively\b",
     re.IGNORECASE,
 )
 
@@ -91,8 +114,8 @@ def is_carbon_neon_exclusive(
     last_input: str,
     brief: str,
 ) -> bool:
-    """Return True when the user or worker header explicitly requests strict Carbon/Neon exclusivity."""
-    if "[carbon-neon]" in worker_tags or "[carbon-neon]" in turn_flags:
+    """Return True when the user or worker header explicitly requests strict Architect/Builder exclusivity."""
+    if (worker_tags & EXCLUSIVITY_FLAGS) or (turn_flags & EXCLUSIVITY_FLAGS):
         return True
     clean_in = strip_code_spans(last_input)
     if clean_in and _CARBON_NEON_PHRASE_RE.search(clean_in):

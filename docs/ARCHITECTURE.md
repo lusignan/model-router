@@ -1,6 +1,6 @@
 # Model Router Architecture
 
-This document specifies the internal architecture of `model-router`: its cross-harness wire protocol adapter (**Google Antigravity** and **Claude Code**), its core **Model Alloy** (`model_router.alloy`) 8-stage routing policy, negation-safe text extraction, dual-window quota state machine, inline edit-budget guard, and cross-platform persistence contract.
+This document specifies the internal architecture of `model-router`: its cross-harness hook adapter (**Google Antigravity** and **Claude Code**), its core **Model Alloy** (`model_router.alloy`) 8-stage routing policy, negation-safe text extraction, dual-window quota state machine, inline edit-budget guard, and cross-platform persistence contract.
 
 ---
 
@@ -10,31 +10,40 @@ This document specifies the internal architecture of `model-router`: its cross-h
 
 | Module | Layer | Responsibility |
 |---|---|---|
-| `adapters.py` | Control Plane | Auto-detects wire schema (`antigravity` camelCase vs. `claude-code` snake_case), translates Claude Code `Task`/`Agent`/`*swarm*` rewrites into `hookSpecificOutput.updatedInput` preserving all original keys, gates Architect inline edits (`Edit`/`MultiEdit`/`Write`/`NotebookEdit`), and forwards `PostToolUse` `tool_response` 429 errors. |
-| `config.py` | Control Plane | Immutable `RouterConfig` (`AlloyConfig` alias), `ModelPool` with semantic role-slot properties (`architect`, `builder_xhigh`, `builder_high`, `grunt_high`, `grunt_low`, `failover_grunt_high`, `failover_grunt_low`, `forensic`), named presets (`antigravity`, `claude-code`, `multi-provider`), layered JSON discovery (`.agents/model-router.json` & `.agents/alloy.json`), and cross-platform state paths. |
-| `text.py` | Control Plane | Offset-preserving Markdown code-span masking (`mask_code_spans`, `strip_code_spans`), header-bounded worker tag extraction (`extract_worker_tags`), turn-flag isolation (`extract_turn_flags`), exclusivity detection, and negation/audit-noun scrubbing (`scrub_negated_coding_markers`). |
+| `adapters.py` | Control Plane | Auto-detects hook schema (`antigravity` camelCase vs. `claude-code` snake_case), translates Claude Code `Task`/`Agent`/`*swarm*` rewrites into `hookSpecificOutput.updatedInput` while preserving all original keys, gates Architect inline edits (`Edit`/`MultiEdit`/`Write`/`NotebookEdit`), and forwards `PostToolUse` `tool_response` 429 errors. |
+| `config.py` | Control Plane | Immutable `RouterConfig` (`AlloyConfig` alias), `ModelPool` with semantic role-slot properties (`architect`, `builder_xhigh`, `builder_high`, `grunt_high`, `grunt_low`, `failover_grunt_high`, `failover_grunt_low`, `forensic`), named presets (`antigravity`, `claude-code`, `multi-provider`), `load_config(..., default_preset=...)` fallback selection, layered JSON discovery (`.agents/model-router.json` & `.agents/alloy.json`), and cross-platform state paths. |
+| `text.py` | Control Plane | Offset-preserving Markdown code-span masking (`mask_code_spans`, `strip_code_spans`), header-bounded worker tag extraction (`extract_worker_tags` supporting vendor-neutral and legacy aliases), turn-flag isolation (`extract_turn_flags`), exclusivity detection, and negation/audit-noun scrubbing (`scrub_negated_coding_markers`). |
 | `quota.py` | Control Plane | Dual-window `resetTime`-aware quota state machine: reverse-seek `transcript_full.jsonl` scanning, lazy `urllib.request` Language Server `GetCascadeModelConfigData` polling, asymmetric 5h-vs-weekly merge, `PostToolUse` flush-race invalidation, and `until <ISO>` 429 error circuit breaking. |
 | `guards.py` | Control Plane | `PreToolUse` guards: unmanaged `invoke_subagent` blocker (exempting configured specialists), `run_workflow` `agent(...)` blocker, and lean/heavy inline Architect edit & planner-batch capper. |
 | `alloy.py` | Policy Engine | **The Model Alloy component**: 8-stage cognitive-asymmetry & Research & Audit Dyad classifier returning structured `RouteExplanation` records with stable `rule_id`s. |
-| `cli.py` / `__main__.py` | Control Plane | Harness-aware `decide()`, `--explain [--preset] [--harness] [--pretty]` diagnostic CLI, and `--refresh-quota`, failing open cleanly on malformed stdin (`{}` for Claude Code / `PostToolUse`, `{"decision":"allow"}` for Antigravity `PreToolUse`). |
+| `cli.py` / `__main__.py` | Control Plane | Harness-aware `decide()` (detects harness before config load so unconfigured Claude Code payloads select `default_preset="claude-code"`), `--explain [--preset] [--harness] [--pretty]` diagnostic CLI (defaulting to `"claude-code"` when `--harness claude-code` is passed without `--preset`), and `--refresh-quota`. Fails open cleanly on malformed stdin (`{}` for Claude Code / `PostToolUse`, `{"decision":"allow"}` for Antigravity `PreToolUse`). |
 
 The executable hook shim `hooks/model_stack_router.py` prepends `src/` to `sys.path`, re-exports the public API, and invokes `cli.main()`.
 
 ---
 
-## 2. Multi-Harness Wire Adapter (`adapters.py`)
+## 2. Multi-Harness Hook Adapter & `default_preset` Auto-Selection (`adapters.py`, `cli.py`, `config.py`)
 
 `detect_harness(payload, harness_override="auto")` inspects top-level keys in constant time:
 - `"toolCall"` or `"hookEventName"` -> `"antigravity"`
 - `"tool_name"` or `"hook_event_name"` or `"tool_input"` -> `"claude-code"`
 
-| Capability | Antigravity Wire Contract | Claude Code Wire Contract |
+| Capability | Antigravity Hook Contract | Claude Code Hook Contract |
 |---|---|---|
 | **Worker dispatch tool** | `toolCall.name` matching `*swarm*` (`args.name`, `args.brief`, `args.model`) | `tool_name` in `("Task", "Agent")` (`tool_input.description`, `tool_input.prompt`, `tool_input.model`) or `*swarm*` |
 | **Model rewrite response** | `{"decision": "allow", "overwrite": {"model": "<target>"}}` | `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "...", "updatedInput": {...tool_input, "model": "<target>"}}}` |
 | **Pass-through allow** | `{"decision": "allow"}` | `{}` |
 | **Inline Architect edit cap** | `edit_file` / `write_file` / `replace_file_content` / `multi_replace_file_content` / `write_to_file` on Gemini parent | `Edit` / `MultiEdit` / `Write` / `NotebookEdit` when `payload.model` or `CLAUDE_MODEL` matches Architect tier (`opus`, `carbon`, `orchestrator`, `o3*`, or `cfg.models.architect`) |
 | **PostToolUse 429 capture** | `payload.error` + `transcriptPath` | `payload.error`, `payload.tool_response.error`, or string `payload.tool_response` matching quota markers |
+
+### Harness-Aware `default_preset` Resolution
+
+`decide()` resolves the active harness before loading configuration and passes `default_preset="claude-code"` for Claude Code payloads (or `"antigravity"` for Antigravity payloads) into `load_config(cwd=..., workspace_paths=..., preset_override=..., default_preset=...)`:
+
+1. If `--preset` (`preset_override`) is provided, that preset wins unconditionally.
+2. Otherwise, `load_config()` starts from `RouterConfig.default(default_preset)` so unconfigured Claude Code hooks emit `opus`/`sonnet`/`haiku` decisions out of the box without requiring `.agents/model-router.json`.
+3. Any explicit `"preset"` in global or workspace JSON overrides (such as `.agents/model-router.json`) still overrides `default_preset`.
+4. On the CLI, `model-router --explain --harness claude-code` follows the same rule and defaults to `preset="claude-code"` whenever `--preset` is omitted.
 
 ---
 
@@ -44,33 +53,47 @@ Every worker dispatch passes through `explain_swarm_route()` in strict top-down 
 
 ```mermaid
 flowchart TD
-    In["Normalized Worker Dispatch\n(Antigravity swarm / Claude Code Task)"] --> TF{"Turn flag\n[allow-gemini] or [inline-gemini]?"}
+    In["Normalized Worker Dispatch\n(Antigravity swarm / Claude Code Task)"] --> TF{"Turn flag\n[allow-inline] / [bypass-router]\n(or [allow-gemini] / [inline-gemini])?"}
     TF -- "Yes" --> R_TF["ALLOW\nrule: turn_flag.allow_gemini"]
-    TF -- "No" --> EX{"Stage 0: [carbon-neon]\nExclusivity Active?"}
+    TF -- "No" --> EX{"Stage 0: [architect-builder-only]\nor [carbon-neon] Exclusivity?"}
     EX -- "Yes + Authorized Architect" --> R_EC["Architect\nrule: exclusivity.carbon"]
     EX -- "Yes + Non-Architect" --> R_EN["Builder XHigh / High\nrule: exclusivity.neon"]
     EX -- "No" --> S1{"Stage 1: Header\n[grunt] / [grunt-low]?"}
     S1 -- "Yes" --> R_G1["Grunt <-> Failover\nrule: grunt.explicit_tag"]
-    S1 -- "No" --> S2{"Stage 2: Superseded\nArgon model?"}
+    S1 -- "No" --> S2{"Stage 2: Superseded\nlegacy model ID?"}
     S2 -- "Yes" --> R_ARG["Alloy Classify\nrule: argon.superseded"]
     S2 -- "No" --> S3{"Stage 3: Untagged\nGrunt Task?"}
     S3 -- "Yes" --> R_G3["Grunt <-> Failover\nrule: grunt.heuristic"]
-    S3 -- "No" --> S4{"Stage 4: Explicit Architect\nor [carbon]/[carbon-dyad]?"}
-    S4 -- "Opus forensic authorized" --> R_OP4["Forensic Opus\nrule: opus.gated"]
+    S3 -- "No" --> S4{"Stage 4: Explicit Architect\nor [architect*]/[carbon*]?"}
+    S4 -- "Forensic Opus authorized" --> R_OP4["Forensic Specialist\nrule: opus.gated"]
     S4 -- "Authorized & Headroom OK" --> R_C4["Architect\nrule: carbon.explicit_authorized / tag_authorized"]
     S4 -- "Coding Loop Detected" --> R_CR["Builder XHigh\nrule: carbon.coding_loop_redirect"]
-    S4 -- "No" --> S5{"Stage 5: Explicit Builder or\n[neon*]/[dyad] tag?"}
+    S4 -- "No" --> S5{"Stage 5: Explicit Builder or\n[builder*]/[neon*]/[dyad]?"}
     S5 -- "Builder High + dyad/research/kernel" --> R_NU["Builder XHigh\nrule: neon.dyad_or_kernel_upgrade"]
     S5 -- "Explicit Builder / Tag" --> R_N5["Builder XHigh / High\nrule: neon.explicit_* / tag_xhigh"]
-    S5 -- "No" --> S6{"Stage 6: Claude\nPool Exhausted?"}
+    S5 -- "No" --> S6{"Stage 6: Primary Grunt Exhausted\n([primary-exhausted] / quota <= 2%)?"}
     S6 -- "Yes" --> R_EXH["Failover / Builder\nrule: claude.exhausted_failover"]
-    S6 -- "No" --> S7{"Stage 7: Explicit\nOpus / Sonnet / GPT?"}
-    S7 -- "Opus gated" --> R_OP["Forensic Opus\nrule: opus.gated"]
+    S6 -- "No" --> S7{"Stage 7: Explicit\n[forensic]/Opus / Sonnet / GPT?"}
+    S7 -- "Forensic gated" --> R_OP["Forensic Specialist\nrule: opus.gated"]
     S7 -- "Sonnet code build" --> R_SC["Builder XHigh\nrule: sonnet.code_redirect"]
     S7 -- "No (Stage 8: Omitted)" --> R_DEF["Alloy Classify\nrule: default.alloy_classify"]
 ```
 
-> **Preset role separation:** **Multi-provider presets** (`antigravity`, `multi-provider`, and custom cross-vendor configs) route build and adversarial/forensic review across different model families so no model grades its own work and **blind spots are less correlated**. The **single-provider `claude-code` preset** tiers roles cleanly across `opus`, `sonnet`, and `haiku` within Anthropic's family (mapping both `architect` and `forensic` to `opus` unless paired with an external reviewer in `.agents/model-router.json`).
+> **Preset role separation:** **Multi-provider presets** (`antigravity`, `multi-provider`, and custom cross-vendor configs) route build and adversarial/forensic review across different model families so no model grades its own work and **blind spots are less correlated**. The **single-provider `claude-code` preset** tiers roles cleanly across `opus`, `sonnet`, and `haiku` within Anthropic's family; both `architect` and `forensic` map to `opus` unless paired with an external reviewer in `.agents/model-router.json`.
+
+### Vendor-Neutral Tags & Turn Flags (with Legacy Aliases)
+
+All routing tags and parent turn flags accept vendor-neutral names alongside legacy Antigravity aliases, and every stable `rule_id` (such as `argon.superseded`, `carbon.coding_loop_redirect`, and `turn_flag.allow_gemini`) remains unchanged for backward compatibility:
+
+| Scope | Vendor-Neutral Token(s) | Legacy Alias(es) | Behavior |
+|---|---|---|---|
+| **Turn Flag** | `[allow-inline]`, `[bypass-router]` | `[allow-gemini]`, `[inline-gemini]` | Bypass router overrides and inline edit caps for the current user turn. |
+| **Turn Flag** | `[primary-exhausted]` | `[claude-exhausted]` | Force primary Verifier/Grunt failover to `failover_grunt_*` for the current turn. |
+| **Turn Flag / Header** | `[architect-builder-only]` | `[carbon-neon]` | Lock all dispatches strictly to `architect` and `builder_*` with zero Grunt/Failover overflow. |
+| **Worker Tag** | `[architect]`, `[architect-dyad]`, `[architect-build]` | `[carbon]`, `[carbon-dyad]`, `[carbon-build]` | Route authorized architecture, dyad research, review, or explicit Architect build to `architect`. |
+| **Worker Tag** | `[builder]`, `[builder-xhigh]`, `[builder-research]`, `[builder-dyad]` | `[neon]`, `[neon-kernel]`, `[neon-research]`, `[neon-dyad]` | Route core implementation, empirical X-ray, or dyad partner work to `builder_xhigh` / `builder_high`. |
+| **Worker Tag** | `[grunt]`, `[grunt-low]` | `[grunt]`, `[grunt-low]` | Route verification, docs/exports, linting, and commits to `grunt_high` / `grunt_low` (with automatic failover). |
+| **Worker Tag** | `[forensic]` | `[opus]` | Authorize gated unspec'd root-cause debugging on the `forensic` slot when primary quota is healthy. |
 
 ---
 
@@ -78,7 +101,7 @@ flowchart TD
 
 Naive substring classifiers suffer from three chronic false positives on engineering briefs:
 
-1. **Quoted tags inside docs/sync briefs:** A `[grunt]` worker updating docs that quote `` `[neon]` `` or fenced blocks containing `[carbon]` would be misclassified as Architect/Builder.
+1. **Quoted tags inside docs/sync briefs:** A `[grunt]` worker updating docs that quote `` `[builder]` `` or `` `[neon]` ``, or fenced blocks containing `[architect]` / `[carbon]`, would be misclassified as Architect/Builder.
    - **Fix:** `mask_code_spans()` blanks inline (`` `...` ``) and fenced (` ```...``` `) spans while preserving byte and line offsets. `extract_worker_tags()` inspects strictly `worker_name` plus the first non-empty line and first `240` masked characters of `brief`, and never reads worker role tags from `lastUserInput`.
 2. **Untagged plumbing workers referencing modeling nouns:** Workers such as `sync-status` summarizing `kalman` and `cholesky` results stay on Grunt, while `sync-engine` implementing `kalman` routes to `builder_xhigh`.
    - **Fix:** `is_plumbing_grunt()` balances `plumbing_name_tokens` against `core_code_build_keywords`.
@@ -134,7 +157,7 @@ sequenceDiagram
     Hook-->>Host: Overwrite grunt worker -> failover_grunt_high
 ```
 
-When `PostToolUse` carries a quota/429 error (on Antigravity or Claude Code `tool_response`), `handle_post_tool_use()` checks the error **before** scanning transcripts—immediately persisting `source="post_tool_error"`, `error_ts=now`, and `claude_reset_ts` parsed from `until <ISO-8601>` so older healthy transcript snapshots (`step_ts < error_ts`) never mask an active 429 error.
+When `PostToolUse` carries a quota/429 error (on Antigravity or Claude Code `tool_response`), `handle_post_tool_use()` checks the error **before** scanning transcripts. It immediately persists `source="post_tool_error"`, `error_ts=now`, and `claude_reset_ts` parsed from `until <ISO-8601>`, so older healthy transcript snapshots (`step_ts < error_ts`) never mask an active 429 error.
 
 ---
 

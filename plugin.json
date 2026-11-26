@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Zero-dependency PreToolUse/PostToolUse subagent router, dual-window quota state machine, and parent-context edit-budget guard powered by the Model Alloy policy (0 LLM tokens, pure Python stdlib).",
   "author": {
-    "name": "lusignan",
+    "name": "Zac de Lusignan",
     "url": "https://github.com/lusignan"
   },
   "repository": "https://github.com/lusignan/model-router",

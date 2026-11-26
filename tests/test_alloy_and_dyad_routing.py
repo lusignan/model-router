@@ -8,6 +8,7 @@ from unittest import mock
 
 from tests.helpers import RouterTestBase, swarm_payload
 
+# isort: split
 from model_router import AlloyConfig, RouterConfig, decide, explain_swarm_route, load_config
 
 
@@ -305,6 +306,73 @@ class TestAlloyAndDyadRouting(RouterTestBase):
         with mock.patch.dict(os.environ, {"MODEL_ROUTER_CONFIG_PATH": str(bad_cfg)}):
             fallback_cfg = load_config()
         self.assertEqual(fallback_cfg.sources, ("defaults",))
+
+    def test_mainstream_software_engineering_keywords_route_cleanly(self) -> None:
+        # Core code build keywords prevent grunt misclassification even when mentioning pytest/boilerplate.
+        for kw in ("endpoint", "parser", "middleware", "serializer", "schema", "migration"):
+            with self.subTest(core_keyword=kw):
+                exp = explain_swarm_route(
+                    {
+                        "action": "add",
+                        "name": "service-worker",
+                        "brief": f"Build the {kw} module, remove boilerplate, and run pytest.",
+                    }
+                )
+                self.assertEqual(exp.overwrite_model, self.models.neon_xhigh)
+                self.assertEqual(exp.rule_id, "default.alloy_classify")
+
+        # Architect spec/research/audit keywords authorize explicit Architect without header tags.
+        for kw in ("threat model", "consistency model", "architecture spec", "race condition", "deadlock"):
+            with self.subTest(architect_keyword=kw):
+                exp = explain_swarm_route(
+                    {
+                        "action": "add",
+                        "name": "systems-review",
+                        "model": self.models.carbon,
+                        "brief": f"Analyze the {kw} for the payment worker queue.",
+                    }
+                )
+                self.assertEqual(exp.rule_id, "carbon.explicit_authorized")
+                self.assertIsNone(exp.overwrite_model)
+
+        # Builder XHigh keywords stay on builder_xhigh under moderate Gemini quota (0.15 <= q < 0.20).
+        for kw in ("full-repo", "call-graph", "lock-free", "distributed", "benchmark sweep"):
+            with self.subTest(xhigh_keyword=kw):
+                exp = explain_swarm_route(
+                    {
+                        "action": "add",
+                        "name": "systems-worker",
+                        "brief": f"Run {kw} refactoring across the transport package.",
+                    },
+                    claude_quota_override=0.60,
+                    gemini_quota_override=0.17,
+                )
+                self.assertEqual(exp.overwrite_model, self.models.neon_xhigh)
+
+    def test_builder_tag_vs_builder_upgrade_tags_on_builder_high(self) -> None:
+        exp_plain_builder = explain_swarm_route(
+            {
+                "action": "add",
+                "name": "light-builder",
+                "model": self.models.neon_high,
+                "brief": "@light-builder [builder]\nAdd small helper adapter in utils.py.",
+            }
+        )
+        self.assertEqual(exp_plain_builder.rule_id, "neon.explicit_high")
+        self.assertIsNone(exp_plain_builder.overwrite_model)
+
+        for tag in ("[builder-xhigh]", "[builder-research]", "[builder-dyad]"):
+            with self.subTest(tag=tag):
+                exp_up = explain_swarm_route(
+                    {
+                        "action": "add",
+                        "name": "deep-builder",
+                        "model": self.models.neon_high,
+                        "brief": f"@deep-builder {tag}\nRun call-graph sweep across all modules.",
+                    }
+                )
+                self.assertEqual(exp_up.rule_id, "neon.dyad_or_kernel_upgrade")
+                self.assertEqual(exp_up.overwrite_model, self.models.neon_xhigh)
 
 
 if __name__ == "__main__":

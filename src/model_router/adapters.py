@@ -8,7 +8,7 @@ from .alloy import RouteExplanation, explain_swarm_route, is_swarm_control_tool
 from .config import RouterConfig
 from .guards import handle_edit
 from .quota import QUOTA_ERROR_MARKERS, handle_post_tool_use
-from .text import extract_turn_flags
+from .text import BYPASS_TURN_FLAGS, extract_turn_flags
 
 CLAUDE_CODE_EDIT_TOOLS: frozenset[str] = frozenset({
     "Edit",
@@ -104,7 +104,7 @@ def handle_claude_code_payload(payload: dict[str, Any], cfg: RouterConfig) -> di
 
     last_input = str(payload.get("last_user_input") or "")
     turn_flags = extract_turn_flags(last_input)
-    if "[allow-gemini]" in turn_flags or "[inline-gemini]" in turn_flags:
+    if turn_flags & BYPASS_TURN_FLAGS:
         return {}
 
     if not isinstance(tool_input, dict):

@@ -1,6 +1,7 @@
 """PreToolUse guards for subagents, workflows, and inline parent-pool edit caps."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import time
@@ -9,6 +10,7 @@ from typing import Any
 
 from .config import RouterConfig, turn_edits_state_path
 from .quota import atomic_write_json
+from .text import BYPASS_TURN_FLAGS
 
 ALLOW: dict[str, Any] = {"decision": "allow"}
 
@@ -25,9 +27,17 @@ _SWARM_TRANSCRIPT_MARKERS: tuple[str, ...] = (
     "[neon-research]",
     "[neon-dyad]",
     "[neon]",
+    "[builder-xhigh]",
+    "[builder-research]",
+    "[builder-dyad]",
+    "[builder]",
     "[carbon-dyad]",
     "[carbon-build]",
     "[carbon]",
+    "[architect-dyad]",
+    "[architect-build]",
+    "[architect]",
+    "[forensic]",
     "<swarm_worker>",
 )
 
@@ -97,12 +107,11 @@ def handle_workflow(
     if sp:
         p = Path(str(sp)).expanduser()
         if p.is_file():
-            try:
+            with contextlib.suppress(OSError):
                 parts.append(p.read_text(encoding="utf-8", errors="ignore"))
-            except OSError:
-                pass
     src = "\n".join(parts)
-    if "agent(" in src and "[allow-gemini]" not in src.lower():
+    src_low = src.lower()
+    if "agent(" in src and not any(flag in src_low for flag in BYPASS_TURN_FLAGS):
         return {
             "decision": "deny",
             "reason": (
@@ -269,10 +278,7 @@ def handle_edit(
     prev_batches = [str(b) for b in raw_batches if b] if isinstance(raw_batches, list) else []
 
     new_count = prev_count + 1
-    if batch_id and batch_id not in prev_batches:
-        batches = prev_batches + [batch_id]
-    else:
-        batches = prev_batches
+    batches = [*prev_batches, batch_id] if batch_id and batch_id not in prev_batches else prev_batches
 
     batch_ok = (len(batches) <= max_batches) if batch_id else True
     if new_count <= max_edits and batch_ok:
@@ -288,12 +294,21 @@ def handle_edit(
         if is_heavy
         else f"lean <1 MB thread ({max_batches} batches / {max_edits} files max)"
     )
+    if conf.models.builder_xhigh == conf.models.grunt_high:
+        delegation_note = (
+            f'Write the exact spec, dispatch code building to Builder ("{conf.models.builder_xhigh}"), '
+            f'and route light mechanical or commit work to Grunt ("[grunt-low]", "{conf.models.grunt_low}").'
+        )
+    else:
+        delegation_note = (
+            f'Write the exact spec, dispatch code building to Builder ("{conf.models.builder_xhigh}"), '
+            f'and route mechanical or verification work to Grunt ("[grunt]", "{conf.models.grunt_high}").'
+        )
     return {
         "decision": "deny",
         "reason": (
             f"Model Router (Alloy policy): inline Architect edit limit ({tier_note}) reached. "
-            "Architect owns specs, briefs, research, and adversarial review — never multi-turn edit-test loops. "
-            f'Write the exact spec and dispatch code building to Builder ("{conf.models.builder_xhigh}") '
-            'and grunt work (docs/exports/guards/commits) to Grunt ("[grunt]").'
+            "Architect owns specs, briefs, research, and adversarial review, never multi-turn edit-test loops. "
+            f"{delegation_note}"
         ),
     }

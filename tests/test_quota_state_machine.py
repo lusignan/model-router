@@ -8,6 +8,7 @@ from unittest import mock
 
 from tests.helpers import RouterTestBase, iso_utc, make_swarm_models_line
 
+# isort: split
 from model_router import (
     RouterConfig,
     claude_pool_exhausted,

@@ -13,6 +13,7 @@ from unittest import mock
 
 from tests.helpers import HOOK_PATH, RouterTestBase, iso_utc
 
+# isort: split
 from model_router import (
     MODEL_PRESETS,
     RouterConfig,
@@ -169,7 +170,10 @@ class TestCrossHarnessAndPresets(RouterTestBase):
                 cfg=cfg,
             )
             self.assertEqual(fifth["hookSpecificOutput"]["permissionDecision"], "deny")
-            self.assertIn("inline Architect edit limit", fifth["hookSpecificOutput"]["permissionDecisionReason"])
+            deny_reason = fifth["hookSpecificOutput"]["permissionDecisionReason"]
+            self.assertIn("inline Architect edit limit", deny_reason)
+            self.assertIn('Grunt ("[grunt-low]", "haiku")', deny_reason)
+            self.assertNotIn("\u2014", deny_reason)
 
     def test_claude_code_post_tool_use_429_tool_response_records_exhaustion(self) -> None:
         cfg = RouterConfig.default("claude-code")
@@ -322,6 +326,172 @@ class TestCrossHarnessAndPresets(RouterTestBase):
         )
         resp = json.loads(proc.stdout.strip())
         self.assertEqual(resp["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
+
+    def test_claude_code_zero_config_defaults_and_override_precedence(self) -> None:
+        # Zero-config workspace (isolated .git boundary, no .agents/model-router.json) auto-defaults to claude-code.
+        empty_repo = self.tmp_dir / "zero_cfg_cc_repo"
+        (empty_repo / ".git").mkdir(parents=True)
+
+        res_grunt_low = decide(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": str(empty_repo),
+                "tool_name": "Task",
+                "tool_input": {
+                    "description": "commit-crew",
+                    "model": "opus",
+                    "prompt": "@commit-crew [grunt-low]\nStage and git commit.",
+                },
+            }
+        )
+        self.assertEqual(res_grunt_low["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
+
+        res_coding_loop = decide(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": str(empty_repo),
+                "tool_name": "Task",
+                "tool_input": {
+                    "description": "arch-patches",
+                    "model": "opus",
+                    "prompt": "Apply patch 2 and call edit_file on parser.py.",
+                },
+            }
+        )
+        self.assertEqual(res_coding_loop["hookSpecificOutput"]["updatedInput"]["model"], "sonnet")
+
+        res_arch_audit = decide(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": str(empty_repo),
+                "tool_name": "Task",
+                "tool_input": {
+                    "description": "arch-audit",
+                    "model": "opus",
+                    "prompt": "@arch-audit [architect]\nAudit patch 2 in parser.py; do NOT call edit_file.",
+                },
+            }
+        )
+        self.assertEqual(res_arch_audit, {})
+
+        res_omitted_build = decide(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": str(empty_repo),
+                "tool_name": "Task",
+                "tool_input": {
+                    "description": "api-builder",
+                    "prompt": "Implement the schema migration endpoint.",
+                },
+            }
+        )
+        self.assertEqual(res_omitted_build["hookSpecificOutput"]["updatedInput"]["model"], "sonnet")
+
+        # Workspace .agents/model-router.json specifying multi-provider overrides the claude-code default.
+        mp_repo = self.tmp_dir / "mp_cc_repo"
+        (mp_repo / ".git").mkdir(parents=True)
+        (mp_repo / ".agents").mkdir(parents=True)
+        (mp_repo / ".agents" / "model-router.json").write_text(
+            json.dumps({"preset": "multi-provider"}), encoding="utf-8"
+        )
+        res_mp_grunt = decide(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": str(mp_repo),
+                "tool_name": "Task",
+                "tool_input": {
+                    "description": "commit-crew",
+                    "model": "opus",
+                    "prompt": "@commit-crew [grunt-low]\nStage and git commit.",
+                },
+            }
+        )
+        self.assertEqual(res_mp_grunt["hookSpecificOutput"]["updatedInput"]["model"], "claude-haiku-4-5")
+
+        res_mp_build = decide(
+            {
+                "hook_event_name": "PreToolUse",
+                "cwd": str(mp_repo),
+                "tool_name": "Task",
+                "tool_input": {
+                    "description": "o3-patches",
+                    "model": "o3",
+                    "prompt": "Apply patch 1 and call edit_file on parser.py.",
+                },
+            }
+        )
+        self.assertEqual(res_mp_build["hookSpecificOutput"]["updatedInput"]["model"], "gemini-2.5-pro")
+
+        # Keyword-only global config preserves claude-code auto-default while applying custom keywords.
+        kw_global = self.tmp_dir / "kw_only_global.json"
+        kw_global.write_text(
+            json.dumps({"light_grunt_keywords": ["custom_quick_bump"]}),
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"MODEL_ROUTER_CONFIG_PATH": str(kw_global)}):
+            res_kw = decide(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "cwd": str(empty_repo),
+                    "tool_name": "Task",
+                    "tool_input": {
+                        "description": "release-helper",
+                        "model": "opus",
+                        "prompt": "Run custom_quick_bump for tag v0.1.1.",
+                    },
+                }
+            )
+        self.assertEqual(res_kw["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
+
+        # CLI --explain --harness claude-code without --preset auto-defaults to claude-code preset.
+        buf_auto = io.StringIO()
+        with redirect_stdout(buf_auto):
+            rc_auto = main(
+                [
+                    "--explain",
+                    "--harness",
+                    "claude-code",
+                    "--cwd",
+                    str(empty_repo),
+                    "--name",
+                    "commit-crew",
+                    "--model",
+                    "opus",
+                    "--brief",
+                    "@commit-crew [grunt-low] Stage and git commit.",
+                ]
+            )
+        self.assertEqual(rc_auto, 0)
+        parsed_auto = json.loads(buf_auto.getvalue())
+        self.assertEqual(parsed_auto["preset"], "claude-code")
+        self.assertEqual(parsed_auto["harness"], "claude-code")
+        self.assertEqual(parsed_auto["overwrite_model"], "haiku")
+        self.assertEqual(parsed_auto["hook_response"]["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
+
+        # Explicit --preset still overrides the harness auto-default.
+        buf_mp = io.StringIO()
+        with redirect_stdout(buf_mp):
+            rc_mp = main(
+                [
+                    "--explain",
+                    "--harness",
+                    "claude-code",
+                    "--preset",
+                    "multi-provider",
+                    "--cwd",
+                    str(empty_repo),
+                    "--name",
+                    "commit-crew",
+                    "--model",
+                    "opus",
+                    "--brief",
+                    "@commit-crew [grunt-low] Stage and git commit.",
+                ]
+            )
+        self.assertEqual(rc_mp, 0)
+        parsed_mp = json.loads(buf_mp.getvalue())
+        self.assertEqual(parsed_mp["preset"], "multi-provider")
+        self.assertEqual(parsed_mp["overwrite_model"], "claude-haiku-4-5")
 
 
 if __name__ == "__main__":

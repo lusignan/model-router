@@ -7,6 +7,8 @@ from typing import Any
 from .config import RouterConfig
 from .quota import claude_pool_exhausted, gemini_headroom_ok, gemini_remaining_fraction
 from .text import (
+    BYPASS_TURN_FLAGS,
+    EXHAUSTED_FLAGS,
     extract_turn_flags,
     extract_worker_tags,
     is_carbon_neon_exclusive,
@@ -39,31 +41,37 @@ _AUDIT_LOOP_DISQUALIFIERS: tuple[str, ...] = (
     "implement phase",
     "regenerate all",
 )
-_NON_GRUNT_TAGS: frozenset[str] = frozenset({
-    "[neon]",
-    "[neon-kernel]",
-    "[neon-research]",
-    "[neon-dyad]",
+_ARCHITECT_ROLE_TAGS: frozenset[str] = frozenset({
     "[carbon]",
     "[carbon-dyad]",
+    "[architect]",
+    "[architect-dyad]",
+})
+_ARCHITECT_BUILD_TAGS: frozenset[str] = frozenset({
     "[carbon-build]",
-    "[carbon-neon]",
-    "[dyad]",
+    "[architect-build]",
+})
+_FORENSIC_TAGS: frozenset[str] = frozenset({
     "[opus]",
+    "[forensic]",
 })
 _NEON_UPGRADE_TAGS: frozenset[str] = frozenset({
     "[neon-kernel]",
     "[neon-research]",
     "[neon-dyad]",
+    "[builder-xhigh]",
+    "[builder-research]",
+    "[builder-dyad]",
     "[dyad]",
 })
-_NEON_EXPLICIT_TAGS: frozenset[str] = frozenset({
-    "[neon-kernel]",
-    "[neon]",
-    "[neon-research]",
-    "[neon-dyad]",
-    "[dyad]",
-})
+_NEON_EXPLICIT_TAGS: frozenset[str] = _NEON_UPGRADE_TAGS | {"[neon]", "[builder]"}
+_NON_GRUNT_TAGS: frozenset[str] = (
+    _NEON_EXPLICIT_TAGS
+    | _ARCHITECT_ROLE_TAGS
+    | _ARCHITECT_BUILD_TAGS
+    | _FORENSIC_TAGS
+    | {"[carbon-neon]", "[architect-builder-only]"}
+)
 
 
 @dataclass(frozen=True)
@@ -124,7 +132,7 @@ def is_light_grunt(name: str, brief: str, cfg: RouterConfig | None = None) -> bo
     if "[grunt-low]" in tags:
         return True
     nm = name.strip().lower()
-    if nm == "narrator" or nm.startswith("narrator-") or nm == "monitor" or nm.startswith("monitor-"):
+    if nm in ("narrator", "monitor") or nm.startswith(("narrator-", "monitor-")):
         return True
     clean_txt = f"{nm}\n{strip_code_spans(brief)}".lower()
     raw_txt = f"{nm}\n{brief}".lower()
@@ -228,7 +236,7 @@ def is_carbon_coding_loop(name: str, brief: str, cfg: RouterConfig | None = None
     """Detect when a coordinator tries to burn Architect turns on multi-file coding/rebuilds."""
     conf = cfg or RouterConfig.default()
     tags = extract_worker_tags(name, brief)
-    if "[carbon-build]" in tags:
+    if tags & _ARCHITECT_BUILD_TAGS:
         return False
     nm = name.strip().lower()
     scrubbed_body = scrub_negated_coding_markers(strip_code_spans(brief))
@@ -251,7 +259,7 @@ def is_carbon_authorized_role(name: str, brief: str, cfg: RouterConfig | None = 
         return False
     if is_carbon_coding_loop(name, brief, conf) or has_plumbing_only_name(name, conf):
         return False
-    if tags & {"[carbon]", "[carbon-dyad]"}:
+    if tags & _ARCHITECT_ROLE_TAGS:
         return True
     if is_grunt_task(name, brief, conf):
         return False
@@ -260,10 +268,10 @@ def is_carbon_authorized_role(name: str, brief: str, cfg: RouterConfig | None = 
 
 
 def opus_authorized(name: str, brief: str, cfg: RouterConfig | None = None) -> bool:
-    """Allow Forensic specialist only when explicitly tagged [opus] or for short forensic briefs."""
+    """Allow Forensic specialist only when explicitly tagged [opus]/[forensic] or for short forensic briefs."""
     conf = cfg or RouterConfig.default()
     tags = extract_worker_tags(name, brief)
-    if "[opus]" in tags:
+    if tags & _FORENSIC_TAGS:
         return True
     b_low = strip_code_spans(brief).lower()
     return len(brief) < conf.thresholds.opus_spec_len_max and any(
@@ -286,12 +294,12 @@ def classify_alloy_worker(
     if is_grunt_task(name, brief, conf) and not (tags & _NON_GRUNT_TAGS):
         return grunt_model(name, brief, claude_exhausted, conf)
     if (
-        (tags & {"[carbon]", "[carbon-dyad]"})
+        (tags & _ARCHITECT_ROLE_TAGS)
         and is_carbon_authorized_role(name, brief, conf)
         and gemini_headroom_ok(conf, gemini_quota_override=gemini_quota_override)
     ):
         return conf.models.architect
-    if "[opus]" in tags and not claude_exhausted:
+    if (tags & _FORENSIC_TAGS) and not claude_exhausted:
         return conf.models.forensic
     return neon_builder_model(
         name,
@@ -387,10 +395,10 @@ def explain_swarm_route(
             config_sources=conf.sources,
         )
 
-    if "[allow-gemini]" in turn_flags or "[inline-gemini]" in turn_flags:
+    if turn_flags & BYPASS_TURN_FLAGS:
         return _make(
             "turn_flag.allow_gemini",
-            "Turn-level [allow-gemini]/[inline-gemini] escape hatch bypasses router overrides.",
+            "Turn-level bypass flag ([allow-inline]/[bypass-router]/[allow-gemini]/[inline-gemini]) skips router overrides.",
         )
 
     if action not in ("add", "model"):
@@ -427,13 +435,13 @@ def explain_swarm_route(
     }
     is_explicit_carbon = req_lower in carbon_aliases
 
-    # Stage 0: [carbon-neon] exclusivity regime
+    # Stage 0: [carbon-neon] / [architect-builder-only] exclusivity regime
     if carbon_neon_only:
         wants_carbon = (
-            "[carbon-build]" in worker_tags
+            bool(worker_tags & _ARCHITECT_BUILD_TAGS)
             or (is_explicit_carbon and is_carbon_authorized_role(w_name, brief, conf))
             or (
-                bool(worker_tags & {"[carbon]", "[carbon-dyad]"})
+                bool(worker_tags & _ARCHITECT_ROLE_TAGS)
                 and is_carbon_authorized_role(w_name, brief, conf)
             )
         )
@@ -489,8 +497,8 @@ def explain_swarm_route(
             cfg=conf,
             claude_quota_override=claude_quota_override,
         )
-        or ("[claude-exhausted]" in worker_tags)
-        or ("[claude-exhausted]" in turn_flags)
+        or bool(worker_tags & EXHAUSTED_FLAGS)
+        or bool(turn_flags & EXHAUSTED_FLAGS)
     )
 
     # Stage 1: Explicit header [grunt] / [grunt-low] always wins before body quotes or heuristics.
@@ -508,7 +516,7 @@ def explain_swarm_route(
             exhausted_state=exhausted,
         )
 
-    # Stage 2: Superseded Argon -> Alloy routing
+    # Stage 2: Superseded legacy model IDs -> Alloy routing
     if "argon" in req_lower:
         target = classify_alloy_worker(
             w_name,
@@ -519,7 +527,7 @@ def explain_swarm_route(
         )
         return _make(
             "argon.superseded",
-            f"Superseded Argon model rewritten to Alloy target {target}.",
+            f"Superseded legacy model ID rewritten to Alloy target {target}.",
             overwrite_model=target,
             exhausted_state=exhausted,
         )
@@ -537,17 +545,17 @@ def explain_swarm_route(
             exhausted_state=exhausted,
         )
 
-    # Stage 4: Explicit Architect requests & explicit [carbon] / [carbon-dyad] headers
+    # Stage 4: Explicit Architect requests & explicit Architect role headers
     if is_explicit_carbon:
         if "opus" in req_lower and opus_authorized(w_name, brief, conf):
             return _make(
                 "opus.gated",
-                "Opus request authorized via [opus] tag or short forensic root-cause brief.",
+                "Opus request authorized via [opus]/[forensic] tag or short forensic root-cause brief.",
                 overwrite_model=None,
                 effective_model=req_model,
                 exhausted_state=exhausted,
             )
-        if "[carbon-build]" in worker_tags or (
+        if (worker_tags & _ARCHITECT_BUILD_TAGS) or (
             is_carbon_authorized_role(w_name, brief, conf)
             and gemini_headroom_ok(conf, gemini_quota_override=gemini_quota_override)
         ):
@@ -573,18 +581,18 @@ def explain_swarm_route(
         )
 
     if (
-        bool(worker_tags & {"[carbon]", "[carbon-dyad]"})
+        bool(worker_tags & _ARCHITECT_ROLE_TAGS)
         and is_carbon_authorized_role(w_name, brief, conf)
         and gemini_headroom_ok(conf, gemini_quota_override=gemini_quota_override)
     ):
         return _make(
             "carbon.tag_authorized",
-            "Explicit [carbon]/[carbon-dyad] header routed to Architect for authorized reasoning role.",
+            "Explicit [carbon]/[carbon-dyad]/[architect]/[architect-dyad] header routed to Architect for authorized reasoning role.",
             overwrite_model=conf.models.architect,
             exhausted_state=exhausted,
         )
 
-    # Stage 5: Explicit Builder requests & [neon-dyad]/[neon-research]/[neon-kernel]/[dyad] upgrades
+    # Stage 5: Explicit Builder requests & dyad/research/kernel upgrades
     if req_lower in neon_xhigh_aliases and gemini_headroom_ok(
         conf, gemini_quota_override=gemini_quota_override
     ):
@@ -635,10 +643,8 @@ def explain_swarm_route(
             conf.models.failover_grunt_high.lower(),
             conf.models.failover_grunt_low.lower(),
         }
-        if (
-            req_lower in failover_ids
-            or req_lower.startswith("gemini-4-hydrogen-")
-            or req_lower.startswith("gemini 4 hydrogen")
+        if req_lower in failover_ids or req_lower.startswith(
+            ("gemini-4-hydrogen-", "gemini 4 hydrogen")
         ):
             return _make(
                 "claude.exhausted_hydrogen_allow",
@@ -661,12 +667,12 @@ def explain_swarm_route(
             exhausted_state=True,
         )
 
-    # Stage 7: Normal Regime — Explicit Claude & GPT requests
+    # Stage 7: Normal Regime: Explicit Claude & GPT requests
     if ("opus" in req_lower and "claude" in req_lower) or req_lower == conf.models.forensic.lower():
         if opus_authorized(w_name, brief, conf):
             return _make(
                 "opus.gated",
-                "Opus request authorized via [opus] tag or short forensic root-cause brief.",
+                "Opus request authorized via [opus]/[forensic] tag or short forensic root-cause brief.",
                 overwrite_model=None,
                 effective_model=req_model,
                 exhausted_state=False,
@@ -685,7 +691,7 @@ def explain_swarm_route(
             exhausted_state=False,
         )
 
-    if req_lower.startswith("claude-") or req_lower.startswith("claude "):
+    if req_lower.startswith(("claude-", "claude ")):
         if "[sonnet]" in worker_tags or not gemini_headroom_ok(
             conf,
             conf.thresholds.gemini_healthy_specialist_quota,

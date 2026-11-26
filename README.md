@@ -12,13 +12,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-9FBBCD?style=flat-square&labelColor=1E292D" alt="MIT License"></a>
 </p>
 
-Built and battle-tested in production as a native **Google Antigravity** plugin (`swarm` routing + 5h RPC/weekly transcript quota reconciliation), with a built-in `PreToolUse`/`PostToolUse` wire adapter for **Claude Code** (`Task`/`Agent` `updatedInput` routing, parent edit-budget guard, HTTP 429 capture) and a pure-Python API (`model_router.decide`) for custom harnesses.
+Built and battle-tested in production as a native **Google Antigravity** plugin (`swarm` routing + 5h RPC/weekly transcript quota reconciliation), with a built-in `PreToolUse`/`PostToolUse` hook adapter for **Claude Code** (`Task`/`Agent` `updatedInput` routing, parent edit-budget guard, HTTP 429 capture) and a pure-Python API (`model_router.decide`) for custom harnesses.
 
 ---
 
-## What Happens on the Wire (Deterministic, `0` LLM Tokens)
+## How It Works (Deterministic, `0` LLM Tokens)
 
-Every hook call reads one JSON event from `stdin` and emits one deterministic JSON decision on `stdout` using pure Python stdlib—zero network round-trips, zero LLM calls on the routing path.
+Every hook call reads one JSON event from `stdin` and emits one deterministic JSON decision on `stdout` using pure Python stdlib: zero network round-trips and zero LLM calls on the routing path.
 
 ### 1. Deterministic Subagent Model Routing
 
@@ -55,7 +55,7 @@ When a root orchestrator spawns an `opus` subagent just to stage files and creat
 }
 ```
 
-> **Google Antigravity wire delta:** For the equivalent `swarm(action="add", ...)` hook payload under the default `antigravity` preset, `stdout` emits `{"decision": "allow", "overwrite": {"model": "claude-sonnet-5-5-low"}}`.
+> **Google Antigravity equivalent:** For a matching `swarm(action="add", ...)` hook payload under the default `antigravity` preset, `stdout` emits `{"decision": "allow", "overwrite": {"model": "claude-sonnet-5-5-low"}}`.
 
 ### 2. Blocking Oversized Inline Parent Edits
 
@@ -79,7 +79,7 @@ Once a heavy (`>= 1 MB`) Architect parent transcript exhausts its single surgica
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "Model Router (Alloy policy): inline Architect edit limit (heavy >=1 MB thread (1100 KB; 1 parallel surgical batch / 4 files max)) reached. Architect owns specs, briefs, research, and adversarial review — never multi-turn edit-test loops. Write the exact spec and dispatch code building to Builder (\"sonnet\") and grunt work (docs/exports/guards/commits) to Grunt (\"[grunt]\")."
+    "permissionDecisionReason": "Model Router (Alloy policy): inline Architect edit limit (heavy >=1 MB thread (1100 KB; 1 parallel surgical batch / 4 files max)) reached. Architect owns specs, briefs, research, and adversarial review, never multi-turn edit-test loops. Write the exact spec, dispatch code building to Builder (\"sonnet\"), and route light mechanical or commit work to Grunt (\"[grunt-low]\", \"haiku\")."
   }
 }
 ```
@@ -97,34 +97,33 @@ pip install -e .   # or: uv tool install .
 
 ### 2. Verify in One Line from Your Shell (No Harness Required)
 
-Pipe raw Claude Code hook JSON directly into `stdin` (uses the default `antigravity` preset unless `.agents/model-router.json` or `MODEL_ROUTER_CONFIG_PATH` selects `"preset": "claude-code"`):
+Pipe raw Claude Code hook JSON directly into `stdin` (Claude Code payloads auto-select the `claude-code` preset and rewrite `opus` -> `haiku` with zero extra config):
 
 ```bash
-printf '{"hook_event_name":"PreToolUse","tool_name":"Task","tool_input":{"description":"commit-crew","prompt":"Stage tracked changes and git commit.","model":"claude-opus-5-5-high"}}\n' \
+printf '{"hook_event_name":"PreToolUse","tool_name":"Task","tool_input":{"description":"commit-crew","prompt":"Stage tracked changes and git commit.","model":"opus"}}\n' \
   | PYTHONPATH=src python3 -m model_router
 ```
 
-Or inspect a routing decision and exact Claude Code wire output with `--explain --pretty` (replace `model-router` with `PYTHONPATH=src python3 -m model_router` if running without `pip install -e .`):
+Or inspect a routing decision and exact Claude Code hook output with `--explain --pretty` (`--harness claude-code` also defaults to the `claude-code` preset automatically when `--preset` is omitted; replace `model-router` with `PYTHONPATH=src python3 -m model_router` if running without `pip install -e .`):
 
 ```bash
 model-router --explain --pretty \
-  --preset claude-code \
   --harness claude-code \
   --name "commit-crew" \
   --model "opus" \
   --brief "Stage tracked changes and git commit."
 ```
 
-### 3. Wire into Claude Code (`.claude/settings.json` + `.agents/model-router.json`)
+### 3. Register in Claude Code (`.claude/settings.json` + Optional `.agents/model-router.json`)
 
-Register the hook command in `.claude/settings.json` (complete template in [`examples/claude-code-settings.example.json`](examples/claude-code-settings.example.json)):
+Register the hook command in `.claude/settings.json` (complete template in [`examples/claude-code-settings.example.json`](examples/claude-code-settings.example.json); `.*swarm.*` covers optional MCP swarm servers while `swarm_wait` is ignored):
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Task|Agent|Edit|MultiEdit|Write|NotebookEdit",
+        "matcher": "Task|Agent|Edit|MultiEdit|Write|NotebookEdit|.*swarm.*",
         "hooks": [
           {
             "type": "command",
@@ -136,7 +135,7 @@ Register the hook command in `.claude/settings.json` (complete template in [`exa
     ],
     "PostToolUse": [
       {
-        "matcher": "Task|Agent",
+        "matcher": "Task|Agent|.*swarm.*",
         "hooks": [
           {
             "type": "command",
@@ -150,15 +149,16 @@ Register the hook command in `.claude/settings.json` (complete template in [`exa
 }
 ```
 
-Then select the `claude-code` preset in your repository root's `.agents/model-router.json`:
+Claude Code payloads auto-select `"preset": "claude-code"` by default. Add an **optional** `.agents/model-router.json` at your repository root only when you want to switch presets (for example, to `"multi-provider"`), override role-slot models, or add repository-specific keywords:
 
 ```json
 {
-  "preset": "claude-code"
+  "preset": "multi-provider",
+  "core_code_build_keywords": ["finite-element", "autodiff"]
 }
 ```
 
-### 4. Wire into Google Antigravity (`~/.gemini/config/plugins/model-router`)
+### 4. Install in Google Antigravity (`~/.gemini/config/plugins/model-router`)
 
 ```bash
 git clone https://github.com/lusignan/model-router.git \
@@ -171,18 +171,24 @@ Antigravity discovers `plugin.json`, root `hooks.json`, `rules/AGENTS.md`, and `
 
 ## Why a "Model Alloy"?
 
-HTTP/proxy LLM routers (`LiteLLM`, `RouteLLM`, etc.) and `model-router` operate at **different, composable layers of the stack**: HTTP/proxy routers sit at the per-prompt API layer—routing individual model calls for cost, latency, or prompt difficulty, often via lightweight classifiers rather than LLM judges—whereas `model-router` operates inside the agent harness at `PreToolUse`/`PostToolUse` boundaries, governing subagent lifecycle roles, rolling/weekly quota windows, and root-session edit budgets (`0` LLM tokens). Most coding harnesses also default to single-model monocultures where one model plans, edits, tests, and approves its own diff, amplifying self-preference bias and local-optimum edit loops. Borrowing from metallurgy—where alloying combines distinct base metals so complementary properties offset individual failure modes—`model-router`'s policy engine ([`src/model_router/alloy.py`](src/model_router/alloy.py)) binds distinct model profiles to asymmetric lifecycle roles. **Multi-provider presets** (`antigravity`, `multi-provider`, and custom cross-vendor configs) route architecture/adversarial review, core implementation, and fast verification across **different model families** so no single model grades its own work and **blind spots are less correlated**; the **single-provider `claude-code` preset** tiers roles cleanly across `opus`, `sonnet`, and `haiku` within Anthropic's family (mapping both `architect` and `forensic` to `opus` unless paired with an external reviewer in `.agents/model-router.json`). Every dispatch resolves against semantic **role slots** (`ModelPool`) rather than hard-coded vendor strings, switchable via `"preset"` in `.agents/model-router.json` or `--preset` on the CLI:
+HTTP proxy routers (`LiteLLM`, `RouteLLM`) and `model-router` operate at different, composable layers of the stack: proxy routers dispatch individual API prompts for cost or latency, whereas `model-router` runs inside the agent harness at `PreToolUse`/`PostToolUse` boundaries to govern subagent lifecycle roles, rolling and weekly quota windows, and root edit budgets at `0` LLM tokens. Like metallurgy, which alloys distinct base metals so complementary strengths offset individual failure modes, `model-router`'s policy engine ([`src/model_router/alloy.py`](src/model_router/alloy.py)) binds separate model profiles to asymmetric lifecycle roles:
 
-| Role Slot (`models.*`) | Systems Role | `claude-code` | `antigravity` *(default)* | `multi-provider` |
+- **Cross-family vs. single-family role separation:** Multi-provider presets (`antigravity`, `multi-provider`, and custom cross-vendor configs) route architecture/adversarial review, core implementation, and fast verification across distinct model families so no model grades its own work and **blind spots are less correlated**. The single-provider `claude-code` preset tiers roles across `opus`, `sonnet`, and `haiku`; both `architect` and `forensic` map to `opus` unless paired with an external reviewer in `.agents/model-router.json`.
+- **Semantic role slots (`ModelPool`):** Every rule resolves against abstract role slots (`architect`, `builder_xhigh`, `grunt_low`, and peers) decoupled from hardcoded vendor strings, switchable via `"preset"` in `.agents/model-router.json` or `--preset` on the CLI. Header routing supports vendor-neutral worker tags (`[architect]`, `[builder]`, `[grunt]`, `[forensic]`) and turn flags (`[allow-inline]`, `[bypass-router]`, `[primary-exhausted]`, `[architect-builder-only]`) alongside legacy aliases.
+- **Preventing self-grading and parent context bloat:** Isolating multi-file edits inside dedicated Builder subagents prevents single-model confirmation loops and keeps heavy parent contexts compact.
+
+| Role Slot (`models.*`) | Systems Role | `claude-code` *(Claude Code default)* | `antigravity` *(Antigravity default)* | `multi-provider` |
 |---|---|---|---|---|
-| `architect` (`carbon`) | **Architect & Gatekeeper** — specs, causal/math derivations, dyad lead, final diff audit | `opus` | `gemini-4-carbon-high` | `o3` |
-| `builder_xhigh` (`neon_xhigh`) | **Builder / 1M Empirical Partner** — core implementation, numerical kernels, full-repo X-ray & ablations | `sonnet` | `gemini-4-neon-xhigh` | `gemini-2.5-pro` |
-| `builder_high` (`neon_high`) | **Builder / 1M Empirical Partner** *(step-down tier)* — light module builds under tight quota | `sonnet` | `gemini-4-neon-high` | `gemini-2.5-pro` |
-| `grunt_high` (`sonnet_high`) | **Fast Verifier / Grunt** — docs/ledger sync, HTML/CSV exports, `compileall`/test/guard sweeps | `sonnet` | `claude-sonnet-5-5-high` | `claude-sonnet-4-5` |
-| `grunt_low` (`sonnet_low`) | **Fast Verifier / Grunt** *(light tier)* — linting, formatting, monitoring, atomic commits | `haiku` | `claude-sonnet-5-5-low` | `claude-haiku-4-5` |
-| `failover_grunt_high` (`hydrogen_high`) | **Failover Verifier / Grunt** — automatic failover when primary verifier/grunt quota `<= 2%` | `haiku` | `gemini-4-hydrogen-high` | `gemini-2.5-flash` |
-| `failover_grunt_low` (`hydrogen_low`) | **Failover Verifier / Grunt** *(light tier)* — automatic failover for light plumbing/commits | `haiku` | `gemini-4-hydrogen-low` | `gemini-2.5-flash` |
-| `forensic` (`opus`) | **Forensic Specialist** — strictly gated unspec'd root-cause debugging (`[opus]` or `< 1,800` chars) | `opus` | `claude-opus-5-5-high` | `claude-opus-4-6` |
+| `architect` (`carbon`) | **Architect & Gatekeeper**: specs, causal/math derivations, dyad lead, final diff audit | `opus` | `gemini-4-carbon-high` | `o3` |
+| `builder_xhigh` (`neon_xhigh`) | **Builder / 1M Empirical Partner**: core implementation, numerical kernels, full-repo X-ray & ablations | `sonnet` | `gemini-4-neon-xhigh` | `gemini-2.5-pro` |
+| `builder_high` (`neon_high`) | **Builder / 1M Empirical Partner** *(step-down tier)*: light module builds under tight quota | `sonnet` | `gemini-4-neon-high` | `gemini-2.5-pro` |
+| `grunt_high` (`sonnet_high`) | **Fast Verifier / Grunt**: docs/ledger sync, HTML/CSV exports, `compileall`/test/guard sweeps | `sonnet` | `claude-sonnet-5-5-high` | `claude-sonnet-4-5` |
+| `grunt_low` (`sonnet_low`) | **Fast Verifier / Grunt** *(light tier)*: linting, formatting, monitoring, atomic commits | `haiku` | `claude-sonnet-5-5-low` | `claude-haiku-4-5` |
+| `failover_grunt_high` (`hydrogen_high`) | **Failover Verifier / Grunt**: automatic failover when primary verifier/grunt quota `<= 2%` | `haiku` | `gemini-4-hydrogen-high` | `gemini-2.5-flash` |
+| `failover_grunt_low` (`hydrogen_low`) | **Failover Verifier / Grunt** *(light tier)*: automatic failover for light plumbing/commits | `haiku` | `gemini-4-hydrogen-low` | `gemini-2.5-flash` |
+| `forensic` (`opus`) | **Forensic Specialist**: strictly gated unspec'd root-cause debugging (`[forensic]`/`[opus]` or `< 1,800` chars) | `opus` | `claude-opus-5-5-high` | `claude-opus-4-6` |
+
+*Note: `antigravity` lists native Google Antigravity pool IDs, while `multi-provider` illustrates direct vendor API model slugs that you can customize in `.agents/model-router.json`.*
 
 ---
 
@@ -192,12 +198,12 @@ Each control-plane component addresses a concrete production failure mode observ
 
 ### 1. 8-Stage Deterministic Precedence Cascade (`alloy.py` & `text.py`)
 
-Naive keyword or regex classifiers fail constantly on real engineering prompts because briefs quote file names, role tags, and negative constraints. `explain_swarm_route()` evaluates an 8-stage top-down cascade (`[carbon-neon]` exclusivity -> explicit `[grunt]` header -> superseded model -> untagged verifier/grunt heuristic -> Architect authorization vs. coding-loop redirect -> Builder / dyad upgrades -> quota exhaustion failover -> explicit specialist / default classification) on pre-cleaned text:
+Naive keyword or regex classifiers fail constantly on real engineering prompts because briefs quote file names, role tags, and negative constraints. `explain_swarm_route()` evaluates an 8-stage top-down cascade (`[architect-builder-only]` / `[carbon-neon]` exclusivity -> explicit `[grunt]` header -> superseded legacy model IDs -> untagged verifier/grunt heuristic -> Architect authorization vs. coding-loop redirect -> Builder / dyad upgrades -> quota exhaustion failover -> explicit specialist / default classification) on pre-cleaned text:
 
 - **Code-span isolation (`mask_code_spans` / `strip_code_spans`):**
   Given worker `test-runner` with brief ``Do NOT redesign the architecture; just run pytest on `kalman_spec.py` ``, naive matching triggers on `"architecture"`, `"kalman"`, and `"spec"`, misrouting a test sweep to an Architect or `1M` Builder. `text.py` blanks backticked `` `kalman_spec.py` `` (and fenced code blocks) while preserving byte offsets, so `"run pytest"` routes cleanly via `grunt.heuristic` (`sonnet` on `claude-code` / `claude-sonnet-5-5-high` on `antigravity`) in `< 0.03 ms` warm in-process `model_router.decide()` at `0` LLM tokens.
 - **Negation-safe scrubbing (`scrub_negated_coding_markers`):**
-  Given worker `arch-review` with brief ``@arch-review [carbon] Audit patch 2 in `kalman_filter.py`; do NOT call edit_file``, naive substring rules trip `"patch "` and `"edit_file"` as a coding loop and wrongly demote the Architect to a Builder. `scrub_negated_coding_markers()` strips negated tool prohibitions (`do NOT call edit_file`) and audit/review noun phrases (`Audit patch`) before checking coding-loop markers, keeping the Architect on review (`carbon.explicit_authorized`) while still redirecting positive directives like `"Apply patch 2 and call edit_file"` (`carbon.coding_loop_redirect`).
+  Given worker `arch-review` with brief ``@arch-review [architect] Audit patch 2 in `kalman_filter.py`; do NOT call edit_file``, naive substring rules trip `"patch "` and `"edit_file"` as a coding loop and wrongly demote the Architect to a Builder. `scrub_negated_coding_markers()` strips negated tool prohibitions (`do NOT call edit_file`) and audit/review noun phrases (`Audit patch`) before checking coding-loop markers, keeping the Architect on review (`carbon.explicit_authorized`) while still redirecting positive directives like `"Apply patch 2 and call edit_file"` (`carbon.coding_loop_redirect`).
 
 ### 2. Parent-Context Inline Edit-Budget Guard (`guards.py`)
 
@@ -213,7 +219,7 @@ $$T_{\text{monolith}}(K) = K C_0 + \frac{K(K-1)}{2}\Delta C \quad \text{vs.} \qu
 
 ### 3. Dual-Window `resetTime`-Aware Quota Failover State Machine (`quota.py`)
 
-Unattended multi-hour runs fail in two subtle ways: rolling `5h` RPC snapshots (`GetCascadeModelConfigData`) can still read healthy while a fixed `weekly` provider cap (`swarm(action="models")` in `transcript_full.jsonl` or HTTP `429` in `PostToolUse`) is exhausted, and `PostToolUse` hooks can fire 100–300 ms before the host flushes the `TOOL_RESULT` line to disk. `quota.py` reconciles both windows asymmetrically—separating cache TTL (`ts`) from transcript watermark (`step_ts`) to defeat the flush race—automatically fails over `Fast Verifier / Grunt` work when primary quota drops `<= 2%`, and recovers on exact `resetTime` boundaries:
+Unattended multi-hour runs fail in two subtle ways: rolling `5h` RPC snapshots (`GetCascadeModelConfigData`) can still read healthy while a fixed `weekly` provider cap (`swarm(action="models")` in `transcript_full.jsonl` or HTTP `429` in `PostToolUse`) is exhausted, and `PostToolUse` hooks can fire 100–300 ms before the host flushes the `TOOL_RESULT` line to disk. `quota.py` reconciles both windows asymmetrically (separating cache TTL `ts` from transcript watermark `step_ts` to defeat the flush race), fails over `Fast Verifier / Grunt` work automatically when primary quota drops to `<= 2%`, and recovers on exact `resetTime` boundaries:
 
 ```mermaid
 stateDiagram-v2
@@ -226,24 +232,24 @@ stateDiagram-v2
     BuilderConstrained --> Normal: "Builder >= 20%"
     BuilderConstrained --> BuilderExhausted: "Builder < 5%"
     BuilderExhausted --> Normal: "Builder >= 20%"
-    Normal --> ExclusivityMode: "[carbon-neon] flag or phrase"
-    PrimaryExhausted --> ExclusivityMode: "[carbon-neon] flag or phrase"
-    BuilderExhausted --> ExclusivityMode: "[carbon-neon] flag or phrase\n(zero Verifier/Failover overflow)"
+    Normal --> ExclusivityMode: "[architect-builder-only] / [carbon-neon]"
+    PrimaryExhausted --> ExclusivityMode: "[architect-builder-only] / [carbon-neon]"
+    BuilderExhausted --> ExclusivityMode: "[architect-builder-only] / [carbon-neon]\n(zero Verifier/Failover overflow)"
 ```
 
-### 4. Wire-Protocol Adapters & Layered `.agents/model-router.json` Config (`adapters.py` & `config.py`)
+### 4. Multi-Harness Hook Adapters & Layered `.agents/model-router.json` Config (`adapters.py` & `config.py`)
 
-`adapters.py` auto-detects the active wire schema in constant time: Claude Code snake_case payloads (`tool_name`/`tool_input` -> `hookSpecificOutput.updatedInput` on rewrite, `{}` on passthrough) vs. Google Antigravity camelCase payloads (`toolCall` -> `{"decision":"allow","overwrite":{"model":"..."}}`).
+`adapters.py` auto-detects the active hook schema in constant time: Claude Code snake_case payloads (`tool_name`/`tool_input` -> `hookSpecificOutput.updatedInput` on rewrite, `{}` on passthrough) vs. Google Antigravity camelCase payloads (`toolCall` -> `{"decision":"allow","overwrite":{"model":"..."}}`).
 
 Configuration merges deterministically in ascending priority without touching plugin code:
-1. Built-in domain-agnostic defaults (`RouterConfig.default()`).
+1. Built-in software and quantitative engineering defaults (`RouterConfig.default()`), which auto-select `preset="claude-code"` on Claude Code payloads and `preset="antigravity"` on Antigravity payloads.
 2. Global overrides: `$MODEL_ROUTER_CONFIG_PATH` / `$AGY_ROUTER_CONFIG_PATH` (if set), else `$PLUGIN_DATA/{alloy,model-router}.json` and `~/.gemini/config/{alloy,model-router}.json`.
 3. Workspace overrides: ancestor `.agents/alloy.json` and `.agents/model-router.json` walking upward from `cwd` (or `workspacePaths[0]`) to `.git`.
 
 Ready-to-copy templates live in [`examples/`](examples/):
-- [`examples/claude-code-settings.example.json`](examples/claude-code-settings.example.json) — Drop-in Claude Code `.claude/settings.json` hook registration.
-- [`examples/workspace-model-router.example.json`](examples/workspace-model-router.example.json) — Workspace keyword, role-slot, and threshold overrides.
-- [`examples/multi-provider.example.json`](examples/multi-provider.example.json) — Cross-vendor `o3` / `gemini-2.5-pro` / `claude-sonnet-4-5` / `gemini-2.5-flash` preset.
+- [`examples/claude-code-settings.example.json`](examples/claude-code-settings.example.json): Drop-in Claude Code `.claude/settings.json` hook registration.
+- [`examples/workspace-model-router.example.json`](examples/workspace-model-router.example.json): Workspace keyword, role-slot, and threshold overrides.
+- [`examples/multi-provider.example.json`](examples/multi-provider.example.json): Cross-vendor `o3` / `gemini-2.5-pro` / `claude-sonnet-4-5` / `gemini-2.5-flash` preset.
 
 ---
 
@@ -253,7 +259,7 @@ The runbooks under `skills/` are **optional, composable workflow protocols layer
 
 ```mermaid
 flowchart LR
-    H1["Claude Code Hook\ntool_name / updatedInput"] --> AD["Wire Adapter\nadapters.py"]
+    H1["Claude Code Hook\ntool_name / updatedInput"] --> AD["Hook Adapter\nadapters.py"]
     H2["Antigravity Hook\ntoolCall / overwrite"] --> AD
     AD --> Q{"Spec Locked?"}
     Q -- "No (Research & Audit Dyad)" --> CD["Architect\nHypotheses & Falsifiable Predictions"]
@@ -304,24 +310,24 @@ model-router/
 ├── examples/             # Drop-in Claude Code, workspace override, and multi-provider JSON templates
 ├── assets/               # SVG header, emblem, favicon & 1280x640 OpenGraph preview
 ├── benchmarks/           # Warm decide() & cold subprocess latency harness (bench_router.py)
-├── tests/                # 48 stdlib unittest / pytest tests covering routing, quota, guards & hygiene
-└── docs/                 # ARCHITECTURE.md (module topology, wire adapters & state machines)
+├── tests/                # 53 stdlib unittest / pytest tests covering routing, quota, guards & hygiene
+└── docs/                 # ARCHITECTURE.md (module topology, hook adapters & state machines)
 ```
 
 ### Development & Verification
 
 ```bash
-pytest -q
+python3 -m compileall -q src hooks benchmarks tests
 python3 -m unittest discover -s tests -v
 mypy --strict src
 ruff check src tests benchmarks hooks
-python3 benchmarks/bench_router.py --assert-p99-ms 10.0
+python3 benchmarks/bench_router.py --assert-p50-ms 10.0 --assert-p99-ms 100.0
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete module topology, cross-harness wire-adapter contract, 8-stage Model Alloy precedence cascade, negation-safe scrubbing rules, and `PostToolUse` JSONL disk-flush race sequence diagram.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete module topology, cross-harness hook-adapter contract, 8-stage Model Alloy precedence cascade, negation-safe scrubbing rules, and `PostToolUse` JSONL disk-flush race sequence diagram.
 
 ---
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT (see [`LICENSE`](LICENSE)).

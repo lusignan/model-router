@@ -14,6 +14,7 @@ from unittest import mock
 
 from tests.helpers import HOOK_PATH, REPO_ROOT, RouterTestBase, iso_utc, swarm_payload
 
+# isort: split
 from model_router import (
     RouterConfig,
     decide,
@@ -104,17 +105,19 @@ class TestGuardsAndCli(RouterTestBase):
         )
         self.assertEqual(allowed_tool_only, {"decision": "allow"})
 
-        allowed_escape = decide(
-            {
-                "hookEventName": "PreToolUse",
-                "modelName": "orchestrator (carbon)",
-                "toolCall": {
-                    "name": "run_workflow",
-                    "args": {"Script": "# [allow-gemini]\nres = agent('ok')"},
-                },
-            }
-        )
-        self.assertEqual(allowed_escape, {"decision": "allow"})
+        for flag in ("[allow-gemini]", "[allow-inline]", "[bypass-router]"):
+            with self.subTest(flag=flag):
+                allowed_escape = decide(
+                    {
+                        "hookEventName": "PreToolUse",
+                        "modelName": "orchestrator (carbon)",
+                        "toolCall": {
+                            "name": "run_workflow",
+                            "args": {"Script": f"# {flag}\nres = agent('ok')"},
+                        },
+                    }
+                )
+                self.assertEqual(allowed_escape, {"decision": "allow"})
 
     def test_inline_edit_guard_lean_and_heavy_caps_plus_exemptions(self) -> None:
         self.transcript_path.write_text(
@@ -148,6 +151,8 @@ class TestGuardsAndCli(RouterTestBase):
             }
         )
         self.assertEqual(sixth["decision"], "deny")
+        self.assertIn('Grunt ("[grunt]", "claude-sonnet-5-5-high")', sixth["reason"])
+        self.assertNotIn("\u2014", sixth["reason"])
 
         # Denied PreToolUse attempts must not inflate persisted count or trigger redundant disk writes.
         lean_state = json.loads(self.edit_state_path.read_text(encoding="utf-8"))
@@ -227,6 +232,26 @@ class TestGuardsAndCli(RouterTestBase):
                 }
             )
             self.assertEqual(res, {"decision": "allow"})
+
+        # Generic role markers ([builder], [architect], [forensic]) also exempt workers without SYSTEM_MESSAGE.
+        for marker in ("[builder]", "[builder-xhigh]", "[architect]", "[forensic]"):
+            with self.subTest(marker=marker):
+                self.transcript_path.write_text(
+                    json.dumps({"step_index": 1, "type": "USER_INPUT", "content": f"@worker {marker}\nTask"}) + "\n",
+                    encoding="utf-8",
+                )
+                for i in range(6):
+                    res = decide(
+                        {
+                            "hookEventName": "PreToolUse",
+                            "modelName": "gemini-4-neon-xhigh",
+                            "conversationId": f"worker-{marker}",
+                            "lastUserInput": "",
+                            "transcriptPath": str(self.transcript_path),
+                            "toolCall": {"name": "edit_file", "args": {"Path": f"/repo/g_{i}.py"}},
+                        }
+                    )
+                    self.assertEqual(res, {"decision": "allow"})
 
     def test_cross_platform_state_paths_respect_plugin_data_and_env_overrides(self) -> None:
         plugin_dir = self.tmp_dir / "plugin_data"
@@ -356,6 +381,7 @@ class TestGuardsAndCli(RouterTestBase):
         plugin_manifest = json.loads((REPO_ROOT / "plugin.json").read_text(encoding="utf-8"))
         self.assertTrue(set(plugin_manifest.keys()).issubset(allowed_plugin_keys))
         self.assertEqual(plugin_manifest["name"], "model-router")
+        self.assertEqual(plugin_manifest["author"]["name"], "Zac de Lusignan")
         self.assertEqual(len(plugin_manifest["suggestedPrompts"]), 3)
         self.assertTrue((REPO_ROOT / plugin_manifest["logo"]).is_file())
 
@@ -410,7 +436,12 @@ class TestGuardsAndCli(RouterTestBase):
         checker = re.compile("|".join(patterns), re.IGNORECASE)
         hits: list[str] = []
         for path in REPO_ROOT.rglob("*"):
-            if ".git" in path.parts or "__pycache__" in path.parts or not path.is_file():
+            if (
+                ".git" in path.parts
+                or "__pycache__" in path.parts
+                or any(part.endswith(".egg-info") for part in path.parts)
+                or not path.is_file()
+            ):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
@@ -421,6 +452,33 @@ class TestGuardsAndCli(RouterTestBase):
             if m is not None:
                 hits.append(f"{rel}: matched '{m.group(0)}'")
         self.assertEqual(hits, [], f"Repository hygiene check failed: {hits}")
+
+        # Enforce zero U+2014 em-dash characters across README.md, docs/, rules/, skills/, and src/.
+        em_dash_targets: list[Path] = []
+        readme_path = REPO_ROOT / "README.md"
+        if readme_path.is_file():
+            em_dash_targets.append(readme_path)
+        for subdir in ("docs", "rules", "skills", "src"):
+            sub_root = REPO_ROOT / subdir
+            if not sub_root.is_dir():
+                continue
+            for p in sorted(sub_root.rglob("*")):
+                if (
+                    "__pycache__" in p.parts
+                    or any(part.endswith(".egg-info") for part in p.parts)
+                    or not p.is_file()
+                ):
+                    continue
+                em_dash_targets.append(p)
+        em_dash_hits: list[str] = []
+        for p in em_dash_targets:
+            try:
+                content = p.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            if "\u2014" in content:
+                em_dash_hits.append(str(p.relative_to(REPO_ROOT)))
+        self.assertEqual(em_dash_hits, [], f"Found forbidden U+2014 em-dash characters in: {em_dash_hits}")
 
         # Enforce zero <text> elements in SVG assets (GitHub Camo web-font safety).
         for svg_path in sorted((REPO_ROOT / "assets").glob("*.svg")):

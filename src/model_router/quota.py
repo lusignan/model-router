@@ -330,9 +330,7 @@ def cached_exhaustion_still_valid(
         return None
     raw_rst = cached.get("claude_reset_ts")
     if isinstance(raw_rst, (int, float)) and not isinstance(raw_rst, bool) and float(raw_rst) > 0:
-        if now < float(raw_rst):
-            return True
-        return False
+        return now < float(raw_rst)
     ts = cached.get("ts")
     if (
         isinstance(ts, (int, float))

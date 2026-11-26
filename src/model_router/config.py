@@ -1,12 +1,14 @@
 """Immutable RouterConfig, role-slot ModelPool presets, layered JSON overrides, and state paths."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 DEFAULT_LIGHT_GRUNT_KEYWORDS: tuple[str, ...] = (
     "lint",
@@ -99,6 +101,17 @@ DEFAULT_CORE_CODE_BUILD_KEYWORDS: tuple[str, ...] = (
     "changepoint",
     "bocpd",
     "polars",
+    "endpoint",
+    "migration",
+    "schema",
+    "parser",
+    "adapter",
+    "serializer",
+    "middleware",
+    "state machine",
+    "concurrency",
+    "compiler",
+    "dispatcher",
 )
 
 DEFAULT_CARBON_SPEC_RESEARCH_AUDIT_KEYWORDS: tuple[str, ...] = (
@@ -132,6 +145,15 @@ DEFAULT_CARBON_SPEC_RESEARCH_AUDIT_KEYWORDS: tuple[str, ...] = (
     "red-team",
     "falsification",
     "dyad",
+    "architecture spec",
+    "system invariant",
+    "invariant",
+    "threat model",
+    "security audit",
+    "race condition",
+    "deadlock",
+    "consistency model",
+    "protocol spec",
 )
 
 DEFAULT_CARBON_CODE_LOOP_MARKERS: tuple[str, ...] = (
@@ -181,6 +203,13 @@ DEFAULT_NEON_XHIGH_KEYWORDS: tuple[str, ...] = (
     "research partner",
     "empirical sweep",
     "oos regression",
+    "full-repo",
+    "codebase audit",
+    "call-graph",
+    "call graph",
+    "benchmark sweep",
+    "distributed",
+    "lock-free",
 )
 
 DEFAULT_OPUS_FORENSIC_KEYWORDS: tuple[str, ...] = (
@@ -489,7 +518,7 @@ def _merge_override(
         models=models,
         thresholds=thresholds,
         preset=preset,
-        sources=cfg.sources + (source_label,),
+        sources=(*cfg.sources, source_label),
         **kw_updates,
     )
 
@@ -596,11 +625,17 @@ def load_config(
     cwd: str = "",
     workspace_paths: Sequence[str] = (),
     preset_override: str = "",
+    default_preset: str = "antigravity",
 ) -> RouterConfig:
     """Load default RouterConfig merged with optional global, workspace, and preset overrides."""
     norm_override = preset_override.strip().lower() if preset_override else ""
     has_preset_override = norm_override in MODEL_PRESETS
-    cfg = RouterConfig.default(norm_override if has_preset_override else "antigravity")
+    if has_preset_override:
+        initial_preset = norm_override
+    else:
+        norm_default = default_preset.strip().lower() if default_preset else "antigravity"
+        initial_preset = norm_default if norm_default in MODEL_PRESETS else "antigravity"
+    cfg = RouterConfig.default(initial_preset)
     seen_resolved: set[str] = set()
 
     ordered_paths: list[tuple[Path, bool]] = list(_global_config_candidates())
@@ -663,10 +698,8 @@ def _resolve_state_path(env_vars: tuple[str, ...], filename: str, tmp_prefix: st
     try:
         cache_dir = Path.home() / ".gemini" / "antigravity" / "cache" / "model_router"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(cache_dir, 0o700)
-        except OSError:
-            pass
         if os.access(cache_dir, os.W_OK):
             return cache_dir / filename
     except (OSError, RuntimeError):

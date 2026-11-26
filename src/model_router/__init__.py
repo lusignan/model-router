@@ -47,6 +47,9 @@ from .quota import (
     refresh_quota_snapshot,
 )
 from .text import (
+    BYPASS_TURN_FLAGS,
+    EXCLUSIVITY_FLAGS,
+    EXHAUSTED_FLAGS,
     extract_turn_flags,
     extract_worker_tags,
     is_carbon_neon_exclusive,
@@ -59,10 +62,13 @@ __version__ = "0.1.0"
 
 __all__ = [
     "ALLOW",
-    "AlloyConfig",
+    "BYPASS_TURN_FLAGS",
     "CLAUDE_CODE_EDIT_TOOLS",
     "EDIT_TOOLS",
+    "EXCLUSIVITY_FLAGS",
+    "EXHAUSTED_FLAGS",
     "MODEL_PRESETS",
+    "AlloyConfig",
     "ModelPool",
     "RouteExplanation",
     "RouterConfig",

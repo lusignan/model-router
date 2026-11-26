@@ -7,6 +7,7 @@ from unittest import mock
 
 from tests.helpers import RouterTestBase, swarm_payload
 
+# isort: split
 from model_router import (
     RouterConfig,
     decide,
@@ -194,6 +195,181 @@ class TestTagAndNegationSafety(RouterTestBase):
             )
         )
         self.assertEqual(res, {"decision": "allow", "overwrite": {"model": self.models.sonnet_high}})
+
+    def test_generic_turn_flags_and_exclusivity_aliases(self) -> None:
+        # Generic bypass turn flags [allow-inline] and [bypass-router] skip router overrides across harnesses.
+        for flag in ("[allow-inline]", "[bypass-router]"):
+            with self.subTest(bypass_flag=flag):
+                exp = explain_swarm_route(
+                    {
+                        "action": "add",
+                        "name": "core-patches",
+                        "model": self.models.carbon,
+                        "brief": "Apply patch 1 and call edit_file on solver.py.",
+                    },
+                    last_input=f"{flag} run direct patch",
+                )
+                self.assertEqual(exp.rule_id, "turn_flag.allow_gemini")
+                self.assertIsNone(exp.overwrite_model)
+                self.assertEqual(
+                    decide(
+                        swarm_payload(
+                            "core-patches",
+                            "Apply patch 1 and call edit_file on solver.py.",
+                            model=self.models.carbon,
+                            last_input=f"{flag} run direct patch",
+                        )
+                    ),
+                    {"decision": "allow"},
+                )
+                # Backticked bypass flags must NOT trigger bypass.
+                self.assertEqual(
+                    decide(
+                        swarm_payload(
+                            "core-patches",
+                            "Apply patch 1 and call edit_file on solver.py.",
+                            model=self.models.carbon,
+                            last_input=f"Document `{flag}` in README.",
+                        )
+                    ),
+                    {"decision": "allow", "overwrite": {"model": self.models.neon_xhigh}},
+                )
+                # Claude Code Task bypass returns {}.
+                cc_bypass = decide(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "last_user_input": f"{flag} keep requested model",
+                        "tool_name": "Task",
+                        "tool_input": {
+                            "description": "commit-crew",
+                            "model": "opus",
+                            "prompt": "@commit-crew [grunt-low]\nStage and git commit.",
+                        },
+                    }
+                )
+                self.assertEqual(cc_bypass, {})
+
+        # [primary-exhausted] triggers failover from worker header or turn input.
+        exp_ex_header = explain_swarm_route(
+            {
+                "action": "add",
+                "name": "grunt-sync",
+                "model": self.models.sonnet_high,
+                "brief": "@grunt-sync [grunt] [primary-exhausted]\nSync STATUS.md.",
+            }
+        )
+        self.assertTrue(exp_ex_header.claude_exhausted)
+        self.assertEqual(exp_ex_header.overwrite_model, self.models.hydrogen_high)
+
+        exp_ex_turn = explain_swarm_route(
+            {
+                "action": "add",
+                "name": "commit-crew",
+                "model": self.models.sonnet_low,
+                "brief": "@commit-crew [grunt-low]\nStage and git commit.",
+            },
+            last_input="[primary-exhausted] failover active",
+        )
+        self.assertTrue(exp_ex_turn.claude_exhausted)
+        self.assertEqual(exp_ex_turn.overwrite_model, self.models.hydrogen_low)
+
+        # [architect-builder-only] and "Architect and Builder exclusively" enforce strict exclusivity.
+        for trigger in ("[architect-builder-only] lock stack", "Run with Architect and Builder exclusively."):
+            with self.subTest(exclusivity_trigger=trigger):
+                exp_arch = explain_swarm_route(
+                    {
+                        "action": "add",
+                        "name": "arch-audit",
+                        "model": self.models.carbon,
+                        "brief": "@arch-audit [architect]\nSecurity audit of auth.py.",
+                    },
+                    last_input=trigger,
+                )
+                self.assertEqual(exp_arch.rule_id, "exclusivity.carbon")
+                self.assertTrue(exp_arch.carbon_neon_exclusive)
+                self.assertIsNone(exp_arch.overwrite_model)
+
+                exp_grunt = explain_swarm_route(
+                    {
+                        "action": "add",
+                        "name": "sync-status",
+                        "model": self.models.sonnet_high,
+                        "brief": "Update STATUS.md and export HTML report.",
+                    },
+                    last_input=trigger,
+                )
+                self.assertEqual(exp_grunt.rule_id, "exclusivity.neon")
+                self.assertTrue(exp_grunt.carbon_neon_exclusive)
+                self.assertEqual(exp_grunt.overwrite_model, self.models.neon_xhigh)
+
+        # Worker header [architect-builder-only] also enforces exclusivity.
+        exp_hdr_excl = explain_swarm_route(
+            {
+                "action": "add",
+                "name": "sync-status",
+                "model": self.models.sonnet_high,
+                "brief": "@sync-status [architect-builder-only]\nUpdate STATUS.md.",
+            }
+        )
+        self.assertEqual(exp_hdr_excl.rule_id, "exclusivity.neon")
+        self.assertEqual(exp_hdr_excl.overwrite_model, self.models.neon_xhigh)
+
+        # Backticked generic exclusivity phrase does not trigger exclusivity.
+        res_quoted = decide(
+            swarm_payload(
+                "sync-status",
+                "Update STATUS.md and export HTML report.",
+                model="",
+                last_input="Mention `Architect and Builder exclusively` and `[architect-builder-only]`.",
+            )
+        )
+        self.assertEqual(res_quoted, {"decision": "allow", "overwrite": {"model": self.models.sonnet_high}})
+
+    def test_generic_worker_role_tags_architect_builder_and_forensic(self) -> None:
+        # [architect] and [architect-dyad] authorize explicit & omitted Architect role.
+        for tag in ("[architect]", "[architect-dyad]"):
+            with self.subTest(tag=tag):
+                brief = f"@arch-review {tag}\nReview protocol spec and cite DECISIONS.md and STATUS.md."
+                exp_explicit = explain_swarm_route(
+                    {"action": "add", "name": "arch-review", "model": self.models.carbon, "brief": brief}
+                )
+                self.assertEqual(exp_explicit.rule_id, "carbon.explicit_authorized")
+                self.assertIsNone(exp_explicit.overwrite_model)
+
+                exp_omitted = explain_swarm_route({"action": "add", "name": "arch-review", "brief": brief})
+                self.assertEqual(exp_omitted.rule_id, "carbon.tag_authorized")
+                self.assertEqual(exp_omitted.overwrite_model, self.models.carbon)
+
+        # [architect-build] overrides coding-loop redirect for explicit Architect.
+        exp_arch_build = explain_swarm_route(
+            {
+                "action": "add",
+                "name": "arch-patches",
+                "model": self.models.carbon,
+                "brief": "@arch-patches [architect-build]\nImplement Wave 5 and call edit_file on parser.py.",
+            }
+        )
+        self.assertEqual(exp_arch_build.rule_id, "carbon.explicit_authorized")
+        self.assertIsNone(exp_arch_build.overwrite_model)
+
+        # [builder], [builder-xhigh], [builder-research], [builder-dyad] route omitted model to builder_xhigh.
+        for tag in ("[builder]", "[builder-xhigh]", "[builder-research]", "[builder-dyad]"):
+            with self.subTest(tag=tag):
+                brief = f"@code-worker {tag}\nUpdate middleware and check STATUS.md notes."
+                exp_b = explain_swarm_route({"action": "add", "name": "code-worker", "brief": brief})
+                self.assertEqual(exp_b.rule_id, "neon.tag_xhigh")
+                self.assertEqual(exp_b.overwrite_model, self.models.neon_xhigh)
+
+        # [forensic] gates explicit forensic model even on >1800-char briefs and routes omitted model to forensic.
+        long_brief = "@bug-hunter [forensic]\n" + ("context line " * 180)
+        exp_f_explicit = explain_swarm_route(
+            {"action": "add", "name": "bug-hunter", "model": self.models.opus, "brief": long_brief}
+        )
+        self.assertEqual(exp_f_explicit.rule_id, "opus.gated")
+        self.assertIsNone(exp_f_explicit.overwrite_model)
+
+        exp_f_omitted = explain_swarm_route({"action": "add", "name": "bug-hunter", "brief": long_brief})
+        self.assertEqual(exp_f_omitted.overwrite_model, self.models.opus)
 
 
 if __name__ == "__main__":

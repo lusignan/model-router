@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from .adapters import detect_harness, format_claude_code_pre_tool_output, handle_claude_code_payload
 from .alloy import ALLOW, RouteExplanation, explain_swarm_route, handle_swarm, is_swarm_control_tool
 from .config import MODEL_PRESETS, RouterConfig, load_config
 from .guards import EDIT_TOOLS, handle_edit, handle_subagent, handle_workflow
 from .quota import handle_post_tool_use, refresh_quota_snapshot
-from .text import extract_turn_flags
+from .text import BYPASS_TURN_FLAGS, extract_turn_flags
 
 if TYPE_CHECKING:
     import argparse
@@ -24,7 +25,7 @@ def _handle_antigravity_payload(payload: dict[str, Any], conf: RouterConfig) -> 
     model_name = str(payload.get("modelName") or "").strip().lower()
     last_input = str(payload.get("lastUserInput") or "")
     turn_flags = extract_turn_flags(last_input)
-    if "[allow-gemini]" in turn_flags or "[inline-gemini]" in turn_flags:
+    if turn_flags & BYPASS_TURN_FLAGS:
         return ALLOW
 
     tool_call = payload.get("toolCall")
@@ -60,6 +61,7 @@ def decide(
     harness: str = "auto",
 ) -> dict[str, Any]:
     """Compute PreToolUse/PostToolUse hook output for Antigravity or Claude Code payloads."""
+    resolved_harness = detect_harness(payload, harness)
     if cfg is None:
         cwd = str(payload.get("cwd") or "")
         raw_workspaces = payload.get("workspacePaths")
@@ -68,11 +70,15 @@ def decide(
             if isinstance(raw_workspaces, list)
             else []
         )
-        conf = load_config(cwd=cwd, workspace_paths=workspaces)
+        default_preset = "claude-code" if resolved_harness == "claude-code" else "antigravity"
+        conf = load_config(
+            cwd=cwd,
+            workspace_paths=workspaces,
+            default_preset=default_preset,
+        )
     else:
         conf = cfg
 
-    resolved_harness = detect_harness(payload, harness)
     if resolved_harness == "claude-code":
         return handle_claude_code_payload(payload, conf)
     return _handle_antigravity_payload(payload, conf)
@@ -96,7 +102,7 @@ def format_explanation(
         f"Worker          : {exp.worker_name or '(unnamed)'}",
         f"Requested model : {exp.requested_model or '(omitted)'}",
         f"Effective model : {exp.effective_model or '(unchanged)'}",
-        f"Overwrite model : {exp.overwrite_model or '(none — allow as requested)'}",
+        f"Overwrite model : {exp.overwrite_model or '(none: allow as requested)'}",
         f"Rule ID         : {exp.rule_id}",
         f"Reason          : {exp.reason}",
         f"Worker tags     : {tags_str}",
@@ -127,7 +133,7 @@ def _build_explain_parser() -> argparse.ArgumentParser:
         "--harness",
         choices=("antigravity", "claude-code"),
         default="antigravity",
-        help="Target wire protocol format for hook_response (default: antigravity).",
+        help="Target hook schema format for hook_response (default: antigravity).",
     )
     parser.add_argument("--name", default="", help="Worker roster name or Claude Code Task description.")
     parser.add_argument("--brief", default="", help="Worker brief or Claude Code Task prompt.")
@@ -153,7 +159,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if "--explain" in args_list or "-h" in args_list or "--help" in args_list:
         parser = _build_explain_parser()
         parsed = parser.parse_args(args_list)
-        cfg = load_config(cwd=parsed.cwd, preset_override=parsed.preset)
+        default_preset = "claude-code" if parsed.harness == "claude-code" else "antigravity"
+        cfg = load_config(
+            cwd=parsed.cwd,
+            preset_override=parsed.preset,
+            default_preset=default_preset,
+        )
         swarm_args: dict[str, Any] = {
             "action": "add",
             "name": parsed.name,
